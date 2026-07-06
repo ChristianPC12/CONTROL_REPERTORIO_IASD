@@ -1,0 +1,583 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+  <meta charset="UTF-8">
+  <title>CONTROL_MUSICA_PLAYER</title>
+
+  <style>
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html,
+    body {
+      width: 100%;
+      height: 100%;
+      background: #000;
+      overflow: hidden;
+    }
+
+    body {
+      user-select: none;
+      cursor: none;
+    }
+
+    video,
+    #img {
+      position: fixed;
+      inset: 0;
+      width: 100vw;
+      height: 100vh;
+      object-fit: contain;
+      background: #000;
+      z-index: 1;
+    }
+
+    #img {
+      display: none;
+    }
+
+    #startLayer {
+      position: fixed;
+      inset: 0;
+      z-index: 4;
+      width: 100vw;
+      height: 100vh;
+      border: 0;
+      outline: 0;
+      background: #000;
+      color: rgba(255, 255, 255, 0.12);
+      font: 600 26px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      cursor: none;
+    }
+
+    #startLayer.hidden {
+      display: none;
+    }
+
+    #fade {
+      position: fixed;
+      inset: 0;
+      z-index: 5;
+      background: #000;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.35s ease;
+    }
+
+    #fade.show {
+      opacity: 1;
+    }
+  </style>
+</head>
+
+<body>
+
+  <video id="v" playsinline preload="auto" autoplay></video>
+  <img id="img" alt="">
+  <button id="startLayer" type="button">Preparando reproducción...</button>
+  <div id="fade"></div>
+
+  <script>
+    (function () {
+      var v = document.getElementById('v');
+      var img = document.getElementById('img');
+      var fade = document.getElementById('fade');
+      var startLayer = document.getElementById('startLayer');
+      var ch = new BroadcastChannel('control-musica');
+      var base = location.origin + location.pathname.replace(/player\.html.*$/, '');
+      var params = new URLSearchParams(location.search);
+      var sid = params.get('sid') || 'manual';
+      var stableTitle = 'CONTROL_MUSICA_PLAYER_' + sid;
+      var currentTitle = 'Player';
+      var currentKind = 'video';
+      var closing = false;
+      var browserObjectUrl = '';
+      var FOLDER_DB_NAME = 'control-musica-folders';
+      var FOLDER_DB_STORE = 'handles';
+
+      document.title = stableTitle;
+
+      function post(type, extra) {
+        var payload = Object.assign({ type: type, sid: sid }, extra || {});
+        ch.postMessage(payload);
+      }
+
+      var readyTimer = null;
+      var readyCount = 0;
+      var readyKey = 'control-musica.ready.' + sid;
+      var commandKey = 'control-musica.command.' + sid;
+      var lastCommandId = '';
+      var lastCommandRaw = '';
+
+      function announceReady() {
+        var readyPayload = {
+          type: 'player_ready',
+          sid: sid,
+          outerWidth: window.outerWidth,
+          outerHeight: window.outerHeight,
+          innerWidth: window.innerWidth,
+          innerHeight: window.innerHeight,
+          ts: Date.now()
+        };
+
+        ch.postMessage(readyPayload);
+
+        try {
+          localStorage.setItem(readyKey, JSON.stringify(readyPayload));
+        } catch (e) { }
+      }
+
+      function startReadyRepeater() {
+        announceReady();
+
+        readyTimer = setInterval(function () {
+          readyCount++;
+          announceReady();
+
+          if (readyCount >= 30) {
+            clearInterval(readyTimer);
+            readyTimer = null;
+          }
+        }, 300);
+      }
+
+      startReadyRepeater();
+      window.addEventListener('load', announceReady);
+
+      function buildSrc(folder, file) {
+        return base + 'api.php?action=play'
+          + '&folder=' + encodeURIComponent(folder)
+          + '&file=' + encodeURIComponent(file);
+      }
+
+      function openFolderDb() {
+        return new Promise(function (resolve, reject) {
+          var request = indexedDB.open(FOLDER_DB_NAME, 1);
+
+          request.onupgradeneeded = function () {
+            var db = request.result;
+            if (!db.objectStoreNames.contains(FOLDER_DB_STORE)) {
+              db.createObjectStore(FOLDER_DB_STORE);
+            }
+          };
+
+          request.onsuccess = function () {
+            resolve(request.result);
+          };
+
+          request.onerror = function () {
+            reject(request.error || new Error('No se pudo abrir la base de carpetas.'));
+          };
+        });
+      }
+
+      async function getFolderHandle(folderId) {
+        var db = await openFolderDb();
+
+        try {
+          return await new Promise(function (resolve, reject) {
+            var tx = db.transaction(FOLDER_DB_STORE, 'readonly');
+            var request = tx.objectStore(FOLDER_DB_STORE).get(folderId);
+
+            request.onsuccess = function () {
+              resolve(request.result || null);
+            };
+
+            request.onerror = function () {
+              reject(request.error || new Error('No se pudo recuperar la carpeta.'));
+            };
+          });
+        } finally {
+          db.close();
+        }
+      }
+
+      async function ensureFolderPermission(handle) {
+        if (!handle) return false;
+
+        if (typeof handle.queryPermission === 'function') {
+          var current = await handle.queryPermission({ mode: 'read' });
+          if (current === 'granted') return true;
+        }
+
+        if (typeof handle.requestPermission === 'function') {
+          var requested = await handle.requestPermission({ mode: 'read' });
+          return requested === 'granted';
+        }
+
+        return true;
+      }
+
+      function revokeBrowserObjectUrl() {
+        if (!browserObjectUrl) return;
+
+        URL.revokeObjectURL(browserObjectUrl);
+        browserObjectUrl = '';
+      }
+
+      function showStartLayer() {
+        startLayer.classList.remove('hidden');
+      }
+
+      function hideStartLayer() {
+        startLayer.classList.add('hidden');
+      }
+
+      function showVideoSurface() {
+        currentKind = 'video';
+        img.style.display = 'none';
+        img.removeAttribute('src');
+        v.style.display = 'block';
+      }
+
+      function showImageSurface() {
+        currentKind = 'image';
+        v.pause();
+        v.removeAttribute('src');
+        v.load();
+        v.style.display = 'none';
+        img.style.display = 'block';
+        hideStartLayer();
+      }
+
+      function tryPlay() {
+        if (!v.src) return;
+
+        var promise = v.play();
+
+        if (promise && typeof promise.then === 'function') {
+          promise.then(function () {
+            hideStartLayer();
+          }).catch(function () {
+            showStartLayer();
+          });
+        }
+      }
+
+      function loadVideo(folder, file, title) {
+        if (readyTimer) {
+          clearInterval(readyTimer);
+          readyTimer = null;
+        }
+
+        revokeBrowserObjectUrl();
+        showVideoSurface();
+        currentTitle = title || file;
+        document.title = stableTitle;
+        fade.classList.remove('show');
+        showStartLayer();
+
+        v.pause();
+        v.src = buildSrc(folder, file);
+        v.muted = false;
+        v.load();
+
+        v.addEventListener('canplay', function onCanPlay() {
+          v.removeEventListener('canplay', onCanPlay);
+          tryPlay();
+        });
+
+        tryPlay();
+        setTimeout(tryPlay, 160);
+        setTimeout(tryPlay, 520);
+      }
+
+      function loadImage(folder, file, title) {
+        if (readyTimer) {
+          clearInterval(readyTimer);
+          readyTimer = null;
+        }
+
+        revokeBrowserObjectUrl();
+        showImageSurface();
+        currentTitle = title || file;
+        document.title = stableTitle;
+        fade.classList.remove('show');
+
+        img.onload = function () {
+          post('loaded', {
+            title: currentTitle,
+            duration: 0,
+            kind: 'image'
+          });
+        };
+
+        img.onerror = function () {
+          post('load_error', {
+            message: 'No se pudo cargar la imagen.'
+          });
+        };
+
+        img.src = buildSrc(folder, file);
+      }
+
+      async function loadBrowserVideo(folder, file, title) {
+        if (readyTimer) {
+          clearInterval(readyTimer);
+          readyTimer = null;
+        }
+
+        currentTitle = title || file;
+        showVideoSurface();
+        document.title = stableTitle;
+        fade.classList.remove('show');
+        showStartLayer();
+
+        v.pause();
+        revokeBrowserObjectUrl();
+
+        try {
+          var folderHandle = await getFolderHandle(folder);
+
+          if (!folderHandle) {
+            throw new Error('Carpeta no encontrada en el navegador.');
+          }
+
+          var hasPermission = await ensureFolderPermission(folderHandle);
+
+          if (!hasPermission) {
+            throw new Error('Sin permiso para leer la carpeta.');
+          }
+
+          var fileHandle = await folderHandle.getFileHandle(file);
+          var browserFile = await fileHandle.getFile();
+
+          browserObjectUrl = URL.createObjectURL(browserFile);
+          v.src = browserObjectUrl;
+          v.muted = false;
+          v.load();
+
+          v.addEventListener('canplay', function onCanPlay() {
+            v.removeEventListener('canplay', onCanPlay);
+            tryPlay();
+          });
+
+          tryPlay();
+          setTimeout(tryPlay, 160);
+          setTimeout(tryPlay, 520);
+        } catch (err) {
+          post('load_error', {
+            message: err && err.message ? err.message : 'No se pudo cargar el video.'
+          });
+        }
+      }
+
+      async function loadBrowserImage(folder, file, title) {
+        if (readyTimer) {
+          clearInterval(readyTimer);
+          readyTimer = null;
+        }
+
+        currentTitle = title || file;
+        document.title = stableTitle;
+        fade.classList.remove('show');
+        showImageSurface();
+        revokeBrowserObjectUrl();
+
+        try {
+          var folderHandle = await getFolderHandle(folder);
+
+          if (!folderHandle) {
+            throw new Error('Carpeta no encontrada en el navegador.');
+          }
+
+          var hasPermission = await ensureFolderPermission(folderHandle);
+
+          if (!hasPermission) {
+            throw new Error('Sin permiso para leer la carpeta.');
+          }
+
+          var fileHandle = await folderHandle.getFileHandle(file);
+          var browserFile = await fileHandle.getFile();
+
+          browserObjectUrl = URL.createObjectURL(browserFile);
+
+          img.onload = function () {
+            post('loaded', {
+              title: currentTitle,
+              duration: 0,
+              kind: 'image'
+            });
+          };
+
+          img.onerror = function () {
+            post('load_error', {
+              message: 'No se pudo cargar la imagen.'
+            });
+          };
+
+          img.src = browserObjectUrl;
+        } catch (err) {
+          post('load_error', {
+            message: err && err.message ? err.message : 'No se pudo cargar la imagen.'
+          });
+        }
+      }
+
+      function sendState() {
+        if (currentKind === 'image') return;
+
+        post('time', {
+          current: v.currentTime || 0,
+          duration: v.duration || 0,
+          paused: v.paused
+        });
+      }
+
+      function requestBackendClose() {
+        if (!sid) return;
+
+        try {
+          fetch(base + 'api.php?action=close_player&sid=' + encodeURIComponent(sid), {
+            keepalive: true
+          }).catch(function () { });
+        } catch (e) { }
+      }
+
+      function closeWithFade() {
+        if (closing) return;
+        closing = true;
+        fade.classList.add('show');
+
+        setTimeout(function () {
+          requestBackendClose();
+          try { window.close(); } catch (e) { }
+        }, 350);
+      }
+
+      startLayer.addEventListener('click', function () {
+        tryPlay();
+      });
+
+      document.addEventListener('click', function () {
+        tryPlay();
+      });
+
+      document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          closeWithFade();
+        }
+      });
+
+      v.addEventListener('loadedmetadata', function () {
+        post('loaded', {
+          title: currentTitle,
+          duration: v.duration || 0
+        });
+      });
+
+      v.addEventListener('timeupdate', sendState);
+      v.addEventListener('play', sendState);
+      v.addEventListener('pause', sendState);
+
+      v.addEventListener('ended', function () {
+        post('ended');
+      });
+
+      window.addEventListener('beforeunload', function () {
+        revokeBrowserObjectUrl();
+        post('player_closed');
+      });
+
+      function handleCommand(d) {
+        d = d || {};
+
+        if (d.sid && d.sid !== sid) return;
+        if (d._id && d._id === lastCommandId) return;
+        if (d._id) lastCommandId = d._id;
+
+        if (d.type === 'load' && d.folder && d.file) {
+          var kind = d.kind === 'image' ? 'image' : 'video';
+
+          if (kind === 'image') {
+            if (d.source === 'browser') {
+              loadBrowserImage(d.folder, d.file, d.title || d.file);
+              return;
+            }
+
+            loadImage(d.folder, d.file, d.title || d.file);
+            return;
+          }
+
+          if (d.source === 'browser') {
+            loadBrowserVideo(d.folder, d.file, d.title || d.file);
+            return;
+          }
+
+          loadVideo(d.folder, d.file, d.title || d.file);
+          return;
+        }
+
+        if (d.type === 'play') {
+          tryPlay();
+          return;
+        }
+
+        if (d.type === 'pause') {
+          v.pause();
+          return;
+        }
+
+        if (d.type === 'seek') {
+          v.currentTime = Number(d.time) || 0;
+          return;
+        }
+
+        if (d.type === 'close') {
+          closeWithFade();
+        }
+      }
+
+      function loadInitialFromQuery() {
+        var folder = params.get('folder') || '';
+        var file = params.get('file') || '';
+
+        if (!folder || !file) return;
+
+        handleCommand({
+          type: 'load',
+          sid: sid,
+          folder: folder,
+          file: file,
+          source: params.get('source') === 'browser' ? 'browser' : 'api',
+          kind: params.get('type') === 'image' ? 'image' : 'video',
+          title: params.get('title') || file
+        });
+      }
+
+      loadInitialFromQuery();
+
+      ch.onmessage = function (e) {
+        handleCommand(e.data || {});
+      };
+
+      window.addEventListener('storage', function (e) {
+        if (e.key !== commandKey || !e.newValue) return;
+
+        try {
+          lastCommandRaw = e.newValue;
+          handleCommand(JSON.parse(e.newValue));
+        } catch (err) { }
+      });
+
+      setInterval(function () {
+        try {
+          var raw = localStorage.getItem(commandKey);
+          if (!raw || raw === lastCommandRaw) return;
+
+          lastCommandRaw = raw;
+          handleCommand(JSON.parse(raw));
+        } catch (err) { }
+      }, 300);
+    })();
+  </script>
+</body>
+
+</html>

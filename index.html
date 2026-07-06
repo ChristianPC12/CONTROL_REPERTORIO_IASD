@@ -1,0 +1,484 @@
+﻿<!DOCTYPE html>
+<html lang="es">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <title>Control Musica</title>
+  <script>
+    /* Anti-parpadeo: aplica el tema guardado antes de pintar. */
+    (function () {
+      try {
+        var ids = ['santuario', 'cielo', 'oliva', 'vino', 'noche', 'trigo', 'indigo'];
+        var t = localStorage.getItem('cm_theme');
+        if (t && t !== 'santuario' && ids.indexOf(t) !== -1) {
+          document.documentElement.setAttribute('data-theme', t);
+        }
+      } catch (e) {}
+    })();
+  </script>
+  <link rel="stylesheet" href="styles.css?v=28">
+</head>
+
+<body>
+  <div class="backdrop"></div>
+
+  <main class="shell">
+    <section class="hero-layout">
+
+      <!-- Panel izquierdo -->
+      <div class="hero card">
+        <div class="hero-copy">
+          <p class="eyebrow">&bull; Himnos &bull; Coritos &bull; Especiales &bull; JA</p>
+          <h1>Control de Repertorio</h1>
+
+          <p class="lead">
+            Presenta videos, im&aacute;genes y playlists al instante en la pantalla correcta.
+          </p>
+
+          <div class="actions">
+            <label class="folder-select">
+              <span>Carpeta</span>
+              <select id="folderSelect">
+                <option value="">-- Cargando carpetas --</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="playback-options">
+            <label class="option-select">
+              <span>Pantalla</span>
+              <select id="monitorSelect">
+                <option value="">Detectando pantallas...</option>
+              </select>
+            </label>
+            <label class="option-select">
+              <span>Tipo de archivo</span>
+              <select id="mediaTypeSelect">
+                <option value="video" selected>Video</option>
+                <option value="image">Imagen</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="folder-action-row">
+            <button id="playAllBtn" class="icon-action-btn play-all-btn" type="button" aria-pressed="false" aria-label="Reproducir carpeta" title="Reproducir carpeta">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M5 5.8c0-.7.8-1.1 1.4-.7l7.2 5.1c.5.4.5 1.2 0 1.6l-7.2 5.1c-.6.4-1.4 0-1.4-.7V5.8Z"></path>
+                <path d="M14 5.8c0-.7.8-1.1 1.4-.7l7.2 5.1c.5.4.5 1.2 0 1.6l-7.2 5.1c-.6.4-1.4 0-1.4-.7V5.8Z"></path>
+              </svg>
+            </button>
+            <button id="addFolderBtn" class="icon-action-btn add-folder-btn" type="button" aria-label="Agregar carpeta" title="Agregar carpeta">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M3 7.2c0-1.1.9-2 2-2h5.1c.6 0 1.1.2 1.5.7l1.2 1.4H19c1.1 0 2 .9 2 2v1.2H3V7.2Z"></path>
+                <path d="M3 10.5h18v6.3c0 1.1-.9 2-2 2H5c-1.1 0-2-.9-2-2v-6.3Z"></path>
+                <path d="M12 12.5v4"></path>
+                <path d="M10 14.5h4"></path>
+              </svg>
+            </button>
+            <button id="renameMediaBtn" class="icon-action-btn rename-media-btn" type="button" aria-label="Cambiar nombre" title="Cambiar nombre">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M4 18.5h16"></path>
+                <path d="M6.2 14.7 15.9 5c.8-.8 2.1-.8 2.9 0l.2.2c.8.8.8 2.1 0 2.9l-9.7 9.7-4.1 1 1-4.1Z"></path>
+              </svg>
+            </button>
+            <button id="tempPlaylistBtn" class="icon-action-btn temp-playlist-btn video-only-action" type="button" aria-label="Crear playlist" title="Crear playlist">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M4 6h10"></path>
+                <path d="M4 11h10"></path>
+                <path d="M4 16h6"></path>
+                <path d="M16 14.5c0-.7.8-1.1 1.4-.7l3.7 2.4c.6.4.6 1.2 0 1.6l-3.7 2.4c-.6.4-1.4 0-1.4-.7v-5Z"></path>
+              </svg>
+            </button>
+            <button id="viewPlaylistsBtn" class="icon-action-btn view-playlists-btn video-only-action" type="button" aria-label="Ver playlists" title="Ver playlists">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M5 5h9"></path>
+                <path d="M5 10h11"></path>
+                <path d="M5 15h7"></path>
+                <path d="M16 14c1.7 0 3 1.3 3 3s-1.3 3-3 3-3-1.3-3-3 1.3-3 3-3Z"></path>
+                <path d="M19 20l2 2"></path>
+              </svg>
+            </button>
+            <button id="themeBtn" class="icon-action-btn theme-btn" type="button" aria-label="Cambiar tema" title="Cambiar tema">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 3c-5 0-9 3.7-9 8.4 0 3.4 2.8 5.6 6 5.6h1.3c.9 0 1.5.9 1.1 1.7l-.2.4c-.5 1 .2 2.4 1.5 2.4 4.4 0 8-3.9 8-8.7C21.7 7 17.3 3 12 3Z"></path>
+                <circle cx="7.5" cy="11" r="1.3"></circle>
+                <circle cx="12" cy="8" r="1.3"></circle>
+                <circle cx="16.5" cy="11" r="1.3"></circle>
+              </svg>
+            </button>
+          </div>
+
+          <p id="statusText" class="status-line">A&uacute;n no has cargado archivos.</p>
+        </div>
+      </div>
+
+      <!-- Panel central: grid de archivos -->
+      <section class="grid-wrap card">
+        <div id="grid" class="grid empty-state">
+          <div class="empty-copy">
+            <h3>Tu repertorio aparecer&aacute; aqu&iacute;</h3>
+            <p>El sistema filtra archivos y crea una vista limpia para abrirlos con un clic.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Panel derecho -->
+      <div class="hero-aside card right-panel">
+        <label class="searchbox">
+          <span>Buscar</span>
+          <input id="searchInput" type="search" placeholder="Escribe un t&iacute;tulo...">
+        </label>
+
+        <div class="stat compact-stat">
+          <span id="videoCount">0</span>
+          <label id="fileCountLabel">videos visibles</label>
+        </div>
+
+        <button id="downloadVideoBtn" class="download-video-btn" type="button">
+          <span class="btn-icon">&darr;</span>
+          Descargar video
+        </button>
+
+        <div class="hint-panel compact-hint">
+          <strong>Flujo r&aacute;pido</strong>
+          <ol>
+            <li>Elige una carpeta o todos.</li>
+            <li>Haz clic en un archivo para abrirlo.</li>
+            <li>Usa <em>Reproducir carpeta</em> para autom&aacute;tico.</li>
+            <li>Descarga nuevos videos sin recargar.</li>
+          </ol>
+        </div>
+
+        <div class="brand-logo">
+          <span class="brand-logo-mark" role="img" aria-label="Logo Iglesia Adventista del S&eacute;ptimo D&iacute;a"></span>
+        </div>
+      </div>
+
+    </section>
+  </main>
+
+  <div id="uiOverlay"></div>
+
+  <div id="imageViewerOverlay" class="image-viewer-overlay" aria-hidden="true" tabindex="-1">
+    <img id="imageViewerImg" alt="">
+  </div>
+
+  <div id="noticeToast" class="notice-toast" role="status" aria-live="polite" aria-hidden="true">
+    <div class="notice-toast-card">
+      <span id="noticeToastIcon" class="notice-toast-icon" aria-hidden="true">!</span>
+      <strong id="noticeToastText"></strong>
+    </div>
+  </div>
+
+  <div id="confirmModal" class="confirm-modal" aria-hidden="true" role="dialog" aria-modal="true">
+    <div class="confirm-card">
+      <span class="confirm-icon" aria-hidden="true">?</span>
+      <strong id="confirmModalTitle">Confirmar</strong>
+      <p id="confirmModalText"></p>
+      <div class="confirm-actions">
+        <button id="confirmModalCancelBtn" type="button" class="confirm-btn confirm-btn-cancel">Cancelar</button>
+        <button id="confirmModalOkBtn" type="button" class="confirm-btn confirm-btn-ok">Confirmar</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="folderAccessModal" class="folder-access-modal" aria-hidden="true" role="dialog" aria-modal="true">
+    <div class="folder-access-card">
+      <div class="folder-access-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24">
+          <path d="M3 7.2c0-1.1.9-2 2-2h5.1c.6 0 1.1.2 1.5.7l1.2 1.4H19c1.1 0 2 .9 2 2v1H3V7.2Z"></path>
+          <path d="M3 10.3h18v6.5c0 1.1-.9 2-2 2H5c-1.1 0-2-.9-2-2v-6.5Z"></path>
+          <path d="M12 12.7v3.8"></path>
+          <path d="M10.1 14.6h3.8"></path>
+        </svg>
+      </div>
+
+      <div class="folder-access-copy">
+        <span>Carpetas</span>
+        <strong>Agregar carpeta al repertorio</strong>
+        <p>Pega la ruta completa de Windows. El sistema la guardar&aacute; en su archivo interno y la usar&aacute; para listar videos e im&aacute;genes.</p>
+      </div>
+
+      <label class="folder-path-field">
+        <span>Ruta de carpeta</span>
+        <input id="folderPathInput" type="text" spellcheck="false" autocomplete="off" placeholder="C:\Users\TuUsuario\Documents\Himnos">
+      </label>
+
+      <div class="folder-access-actions">
+        <button id="folderAccessCancelBtn" type="button" class="folder-access-btn folder-access-btn-secondary">
+          <span>Cancelar</span>
+        </button>
+        <button id="folderAccessChooseBtn" type="button" class="folder-access-btn folder-access-btn-primary">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M3 7.2c0-1.1.9-2 2-2h5.1c.6 0 1.1.2 1.5.7l1.2 1.4H19c1.1 0 2 .9 2 2v1.1H3V7.2Z"></path>
+            <path d="M3 10.4h18v6.4c0 1.1-.9 2-2 2H5c-1.1 0-2-.9-2-2v-6.4Z"></path>
+          </svg>
+          <span>Agregar carpeta</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div id="renameModal" class="utility-modal" aria-hidden="true" role="dialog" aria-modal="true">
+    <div class="utility-card">
+      <div class="utility-top">
+        <strong>Cambiar nombre</strong>
+        <p>Elige un archivo y escribe el nuevo nombre. La extension se conserva automaticamente.</p>
+      </div>
+
+      <div class="utility-grid two-columns">
+        <label class="utility-field">
+          <span>Carpeta</span>
+          <select id="renameFolderSelect"></select>
+        </label>
+        <label class="utility-field">
+          <span>Tipo</span>
+          <select id="renameTypeSelect">
+            <option value="video">Video</option>
+            <option value="image">Imagen</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="utility-field">
+        <span>Archivo</span>
+        <button id="renameFilePickerBtn" type="button" class="file-picker-trigger">
+          <span id="renameFilePickerLabel" class="file-picker-trigger-label">Elige un archivo&hellip;</span>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>
+        </button>
+        <select id="renameFileSelect" class="sr-only" tabindex="-1" aria-hidden="true"></select>
+      </div>
+
+      <label class="utility-field rename-name-field">
+        <span>Nuevo nombre</span>
+        <div class="rename-input-row">
+          <input id="renameNameInput" type="text" maxlength="120" spellcheck="false" autocomplete="off">
+          <em id="renameExtensionLabel"></em>
+        </div>
+      </label>
+
+      <p id="renameStatus" class="utility-status"></p>
+
+      <div class="utility-actions">
+        <button id="renameCancelBtn" type="button" class="folder-access-btn folder-access-btn-secondary">Cancelar</button>
+        <button id="renameSaveBtn" type="button" class="folder-access-btn folder-access-btn-primary">Guardar nombre</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="renameFilePickerModal" class="file-picker-modal" aria-hidden="true" role="dialog" aria-modal="true">
+    <div class="file-picker-card">
+      <div class="file-picker-head">
+        <strong>Elige un archivo</strong>
+        <button id="renameFilePickerCloseBtn" class="file-picker-close" type="button" aria-label="Cerrar">&times;</button>
+      </div>
+      <label class="file-picker-search">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M21 21l-4.2-4.2"></path></svg>
+        <input id="renameFilePickerSearch" type="search" placeholder="Buscar archivo&hellip;" autocomplete="off" spellcheck="false">
+      </label>
+      <div id="renameFilePickerList" class="file-picker-list" role="listbox"></div>
+      <p id="renameFilePickerEmpty" class="file-picker-empty" hidden>Sin resultados.</p>
+    </div>
+  </div>
+
+  <div id="tempPlaylistModal" class="utility-modal wide" aria-hidden="true" role="dialog" aria-modal="true">
+    <div class="utility-card playlist-card">
+      <div class="utility-top">
+        <strong>Crear playlist</strong>
+        <p>Selecciona videos de cualquier carpeta para tenerlos listos en una lista guardada.</p>
+      </div>
+
+      <div class="utility-grid two-columns">
+        <label class="utility-field">
+          <span>Carpeta</span>
+          <select id="tempPlaylistFolderSelect"></select>
+        </label>
+        <label class="utility-field">
+          <span>Buscar</span>
+          <input id="tempPlaylistSearchInput" type="search" placeholder="Nombre del video">
+        </label>
+      </div>
+
+      <div id="tempPlaylistList" class="playlist-picker-list"></div>
+      <p id="tempPlaylistStatus" class="utility-status"></p>
+
+      <div class="utility-actions">
+        <button id="tempPlaylistCancelBtn" type="button" class="folder-access-btn folder-access-btn-secondary">Cancelar</button>
+        <button id="tempPlaylistClearBtn" type="button" class="folder-access-btn folder-access-btn-secondary">Limpiar</button>
+        <button id="tempPlaylistSaveBtn" type="button" class="folder-access-btn folder-access-btn-primary">Agregar playlist</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="playlistNameModal" class="utility-modal compact" aria-hidden="true" role="dialog" aria-modal="true">
+    <div class="utility-card compact-card">
+      <div class="utility-top">
+        <strong>Guardar playlist</strong>
+        <p>Escribe el nombre final de esta playlist.</p>
+      </div>
+
+      <label class="utility-field">
+        <span>Nombre</span>
+        <input id="playlistNameInput" type="text" spellcheck="false" autocomplete="off" placeholder="Especial de s&aacute;bado">
+      </label>
+
+      <p id="playlistNameStatus" class="utility-status"></p>
+
+      <div class="utility-actions">
+        <button id="playlistNameCancelBtn" type="button" class="folder-access-btn folder-access-btn-secondary">Cancelar</button>
+        <button id="playlistNameSaveBtn" type="button" class="folder-access-btn folder-access-btn-primary">Guardar</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="playlistsModal" class="utility-modal wide" aria-hidden="true" role="dialog" aria-modal="true">
+    <div class="utility-card playlist-card">
+      <button id="playlistsCloseBtn" class="utility-close" type="button" aria-label="Cerrar">&times;</button>
+      <div class="utility-top">
+        <strong>Playlists</strong>
+        <p>Selecciona una playlist guardada para ver sus videos.</p>
+      </div>
+
+      <div id="playlistsList" class="saved-playlist-list"></div>
+      <p id="playlistsStatus" class="utility-status"></p>
+    </div>
+  </div>
+
+  <div id="playlistDetailModal" class="utility-modal wide" aria-hidden="true" role="dialog" aria-modal="true">
+    <div class="utility-card playlist-card">
+      <button id="playlistDetailCloseBtn" class="utility-close" type="button" aria-label="Cerrar">&times;</button>
+      <div class="utility-top">
+        <strong id="playlistDetailTitle">Playlist</strong>
+        <p id="playlistDetailMeta"></p>
+      </div>
+
+      <label class="utility-field">
+        <span>Pantalla</span>
+        <select id="playlistDetailMonitorSelect"></select>
+      </label>
+
+      <div id="playlistDetailList" class="playlist-detail-list"></div>
+
+      <div class="utility-actions">
+        <button id="playlistDeleteBtn" type="button" class="folder-access-btn folder-access-btn-secondary danger-utility-btn">Eliminar playlist</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="themeModal" class="utility-modal wide" aria-hidden="true" role="dialog" aria-modal="true">
+    <div class="utility-card theme-card">
+      <button id="themeCloseBtn" class="utility-close" type="button" aria-label="Cerrar">&times;</button>
+      <div class="utility-top">
+        <strong>Tema de la aplicaci&oacute;n</strong>
+        <p>Toca un tema para aplicarlo al instante; se guarda solo. "Cancelar" vuelve al anterior.</p>
+      </div>
+
+      <div id="themeList" class="theme-list" role="radiogroup" aria-label="Temas disponibles"></div>
+      <p id="themeStatus" class="utility-status"></p>
+
+      <div class="utility-actions">
+        <button id="themeCancelBtn" type="button" class="folder-access-btn folder-access-btn-secondary">Cancelar</button>
+        <button id="themeApplyBtn" type="button" class="folder-access-btn folder-access-btn-primary">Listo</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="controllerModal" class="controller-modal">
+    <div class="controller-card">
+      <div class="controller-top">
+        <span>Reproduciendo ahora</span>
+        <strong id="songTitle">Sin reproducci&oacute;n</strong>
+      </div>
+
+      <div class="controller-progress">
+        <span id="currentTime">00:00</span>
+        <input id="progressBar" type="range" min="0" value="0" step="0.1">
+        <span id="duration">00:00</span>
+      </div>
+
+      <div class="controller-actions">
+        <button id="prevBtn" type="button">&#x23EE;</button>
+        <button id="playPauseBtn" type="button" class="main-control">&#x23F8;</button>
+        <button id="nextBtn" type="button">&#x23ED;</button>
+        <button id="closeBtn" type="button" class="danger-control">&times;</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="downloadModal" class="download-modal" aria-hidden="true" role="dialog" aria-modal="true">
+    <div class="download-card">
+      <div class="download-top">
+        <button id="downloadHelpBtn" class="download-help-btn" type="button" aria-label="Ayuda de descargas" title="Ayuda de descargas">?</button>
+        <strong>Descargar video</strong>
+        <p>Selecciona la carpeta destino y pega el enlace del video.</p>
+      </div>
+
+      <label class="download-field">
+        <span>Carpeta destino</span>
+        <select id="downloadFolderSelect">
+          <option value="">-- Selecciona una carpeta --</option>
+        </select>
+      </label>
+
+      <label class="download-field">
+        <span>Enlace del video</span>
+        <input id="downloadUrlInput" type="url" placeholder="https://www.youtube.com/watch?v=...">
+      </label>
+
+      <label class="download-field">
+        <span>Tipo de descarga</span>
+        <select id="downloadTypeSelect">
+          <option value="video" selected>Video espec&iacute;fico</option>
+          <option value="playlist">Playlist de usuario</option>
+        </select>
+      </label>
+
+      <div id="downloadProgressWrap" class="download-progress-wrap hidden">
+        <div class="download-progress-head">
+          <strong id="downloadProgressLabel">Descargando</strong>
+          <span id="downloadProgressDetail"></span>
+        </div>
+        <div class="download-progress-line">
+          <progress id="downloadProgressBar" max="100" value="0"></progress>
+          <strong id="downloadPercent">0%</strong>
+        </div>
+        <pre id="downloadLogTail" class="download-log-tail"></pre>
+      </div>
+
+      <p id="downloadStatus" class="download-status">Pega el enlace del video y selecciona la carpeta donde se guardar&aacute;.</p>
+
+      <div class="download-actions">
+        <button id="downloadCancelBtn" type="button" class="secondary-download-btn">Cancelar</button>
+        <button id="downloadStartBtn" type="button" class="primary-download-btn">Descargar</button>
+      </div>
+    </div>
+  </div>
+
+  <template id="videoCardTemplate">
+    <button class="video-card" type="button">
+      <div class="video-icon">&#x25B6;</div>
+      <div class="video-meta">
+        <strong class="video-title"></strong>
+      </div>
+      <span class="video-chip"></span>
+    </button>
+  </template>
+
+  <div id="downloadHelpModal" class="download-help-modal" aria-hidden="true" role="dialog" aria-modal="true">
+    <div class="download-help-card">
+      <button id="downloadHelpCloseBtn" class="download-help-close" type="button" aria-label="Cerrar">&times;</button>
+      <strong>Ayuda de descargas</strong>
+      <p>Usa <em>Video espec&iacute;fico</em> para un solo video: YouTube, Shorts, Reels o enlaces directos compatibles.</p>
+      <p>Usa <em>Playlist de usuario</em> solo cuando el enlace sea una playlist normal de YouTube. Los Mix autom&aacute;ticos se descargan como el video exacto del enlace.</p>
+      <p>Selecciona una carpeta, pega el enlace y pulsa <em>Descargar</em>. La carpeta se actualizar&aacute; al terminar.</p>
+    </div>
+  </div>
+
+  <script defer src="app.js?v=55"></script>
+</body>
+
+</html>

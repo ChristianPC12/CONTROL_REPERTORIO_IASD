@@ -1,0 +1,23 @@
+# ─── Datos de usuario y runtime (NUNCA publicar) ───
+app_data/
+download_jobs/
+player_jobs/
+*.log
+*.bak
+
+# Binarios descargados en runtime
+yt-dlp*.exe
+ffmpeg*.exe
+
+# ─── Artefactos de compilación / empaquetado ───
+/dist/
+/build/
+*.syso
+# Ejecutables compilados (se generan; no se versionan)
+*.exe
+
+# ─── Sistema / editores ───
+Thumbs.db
+.DS_Store
+.vscode/
+.idea/
