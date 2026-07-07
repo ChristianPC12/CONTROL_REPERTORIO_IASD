@@ -433,15 +433,41 @@ select::-ms-expand {
   color: var(--muted);
   font-size: 0.9rem;
   line-height: 1.4;
-  /* Mensajes largos: máximo 2 líneas con puntos suspensivos, jamás se
-     desbordan del panel. */
+  /* Mensajes largos: una sola línea. Si no cabe, JS lo pasa a modo
+     marquee (.is-marquee) y se desplaza en bucle suave para leerlo todo. */
   min-width: 0;
   max-width: 100%;
   overflow: hidden;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow-wrap: anywhere;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* Modo marquee: el texto se desliza infinito, con separación entre copias
+   para que el bucle se vea fluido (no pegado). */
+.status-line.is-marquee {
+  text-overflow: clip;
+}
+.status-line.is-marquee .status-mq {
+  display: inline-flex;
+  flex-wrap: nowrap;
+  white-space: nowrap;
+  will-change: transform;
+  animation-name: status-mq-scroll;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+}
+.status-line.is-marquee .status-mq > span {
+  padding-right: 48px; /* separación entre repeticiones */
+}
+@keyframes status-mq-scroll {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-50%); }
+}
+/* Accesibilidad: sin animación infinita, mostramos una copia que envuelve. */
+@media (prefers-reduced-motion: reduce) {
+  .status-line.is-marquee { white-space: normal; }
+  .status-line.is-marquee .status-mq { animation: none; }
+  .status-line.is-marquee .status-mq > span:last-child { display: none; }
 }
 
 .grid-wrap {

@@ -4986,3 +4986,64 @@ if (themeApplyBtn) {
     enhanceAllSelects();
   }
 })();
+
+/* Marquee de statusText: si el mensaje no cabe en una línea, se desliza en
+   bucle suave (dos copias + separación) para poder leerlo completo. Muchas
+   partes del código escriben statusText.textContent directo, así que un
+   observador reconstruye el marquee cada vez que cambia el texto. */
+(function setupStatusMarquee() {
+  var el = document.getElementById('statusText');
+  if (!el) return;
+  var SPEED = 45; // px por segundo: ritmo de lectura cómodo
+  var raf = 0;
+  var obs = null;
+
+  function currentText() {
+    // Si ya está en modo marquee, el texto real está en el dataset.
+    if (el.classList.contains('is-marquee') && el.dataset.mqText != null) {
+      return el.dataset.mqText;
+    }
+    return el.textContent;
+  }
+
+  function apply() {
+    if (obs) obs.disconnect();
+    var text = currentText();
+    // Volver a texto plano para medir el ancho de una línea.
+    el.classList.remove('is-marquee');
+    delete el.dataset.mqText;
+    el.textContent = text;
+
+    if (el.scrollWidth > el.clientWidth + 1) {
+      // Desborda: construir pista con dos copias.
+      el.dataset.mqText = text;
+      el.classList.add('is-marquee');
+      el.textContent = '';
+      var track = document.createElement('span');
+      track.className = 'status-mq';
+      var a = document.createElement('span');
+      a.textContent = text;
+      var b = document.createElement('span');
+      b.textContent = text;
+      b.setAttribute('aria-hidden', 'true');
+      track.appendChild(a);
+      track.appendChild(b);
+      el.appendChild(track);
+      // Duración proporcional al ancho => velocidad constante y legible.
+      var half = a.offsetWidth; // incluye la separación (padding-right)
+      var dur = Math.max(6, half / SPEED);
+      track.style.animationDuration = dur.toFixed(2) + 's';
+    }
+
+    if (obs) obs.observe(el, { childList: true, characterData: true, subtree: true });
+  }
+
+  function schedule() {
+    cancelAnimationFrame(raf);
+    raf = requestAnimationFrame(apply);
+  }
+
+  obs = new MutationObserver(schedule);
+  window.addEventListener('resize', schedule);
+  schedule();
+})();
