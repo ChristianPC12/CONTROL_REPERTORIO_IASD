@@ -4,8 +4,8 @@
 ; siempre encuentre su carpeta runtime.
 
 #define MyAppName "Control de Repertorio"
-#define MyAppVersion "1.0.1"
-#define MyAppPublisher "Iglesia Adventista del Septimo Dia"
+#define MyAppVersion "1.0.1.2026"
+#define MyAppPublisher "Christian Eduardo Paniagua Castro"
 #define MyAppExe "Control de Repertorio.exe"
 
 [Setup]
