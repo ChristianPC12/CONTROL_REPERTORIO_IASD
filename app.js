@@ -4026,7 +4026,7 @@ window.addEventListener('focus', function () {
     console.warn('[Monitor] No se pudo sincronizar al enfocar:', e.message);
   });
 
-  if (currentMediaType !== 'image' && currentFolder && !isPlayAllMode && !controllerModal.classList.contains('active')) {
+  if (currentFolder && !isPlayAllMode && !controllerModal.classList.contains('active')) {
     loadFolders(currentFolder, { notice: true, skipAutoLoad: true }).then(function () {
       if (currentFolder) loadVideos(currentFolder, { skipFolderRefresh: true, silent: true });
     });
@@ -4034,7 +4034,10 @@ window.addEventListener('focus', function () {
 });
 
 setInterval(function () {
-  if (document.hidden || currentMediaType === 'image' || !currentFolder || isPlayAllMode || controllerModal.classList.contains('active')) return;
+  // Antes se excluía el tipo imagen (currentMediaType === 'image'), por lo que
+  // las imágenes agregadas por fuera no se reflejaban en vivo. Ahora también se
+  // refrescan; el chequeo de firma (silent) evita re-render si nada cambió.
+  if (document.hidden || !currentFolder || isPlayAllMode || controllerModal.classList.contains('active')) return;
 
   loadFolders(currentFolder, { notice: true, skipAutoLoad: true }).then(function () {
     if (currentFolder) loadVideos(currentFolder, { skipFolderRefresh: true, silent: true });

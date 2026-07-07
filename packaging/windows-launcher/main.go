@@ -10,9 +10,23 @@ import (
 	"path/filepath"
 	"syscall"
 	"time"
+	"unsafe"
 
 	"github.com/getlantern/systray"
 )
+
+// MessageBox de Windows para avisar errores (el launcher no tiene consola).
+var (
+	user32          = syscall.NewLazyDLL("user32.dll")
+	procMessageBoxW = user32.NewProc("MessageBoxW")
+)
+
+func showError(msg string) {
+	title, _ := syscall.UTF16PtrFromString(appName)
+	body, _ := syscall.UTF16PtrFromString(msg)
+	// MB_OK | MB_ICONERROR | MB_SETFOREGROUND = 0x10 | 0x10000
+	procMessageBoxW.Call(0, uintptr(unsafe.Pointer(body)), uintptr(unsafe.Pointer(title)), 0x00010010)
+}
 
 //go:embed icon.ico
 var iconData []byte
@@ -43,6 +57,13 @@ func main() {
 
 	if err := startServer(); err != nil {
 		logLine("ERROR startServer: " + err.Error())
+		showError(
+			"No se pudo iniciar Control de Repertorio.\n\n" +
+				err.Error() + "\n\n" +
+				"Sugerencia: ejecuta la app desde su carpeta original (junto a la " +
+				"carpeta \"runtime\"), no muevas el .exe solo. Si el problema " +
+				"sigue, reinstala.",
+		)
 		guardLn.Close()
 		return
 	}
