@@ -114,7 +114,15 @@ function showConfirmDialog(message, options) {
   if (confirmModalTitle) confirmModalTitle.textContent = settings.title || 'Confirmar';
   confirmModalText.textContent = message;
   if (confirmModalOkBtn) confirmModalOkBtn.textContent = settings.okLabel || 'Confirmar';
-  if (confirmModalCancelBtn) confirmModalCancelBtn.textContent = settings.cancelLabel || 'Cancelar';
+  if (confirmModalCancelBtn) {
+    // hideCancel => diálogo de un solo botón (aviso), no confirmación.
+    if (settings.hideCancel) {
+      confirmModalCancelBtn.style.display = 'none';
+    } else {
+      confirmModalCancelBtn.style.display = '';
+      confirmModalCancelBtn.textContent = settings.cancelLabel || 'Cancelar';
+    }
+  }
 
   confirmModal.classList.add('active');
   confirmModal.setAttribute('aria-hidden', 'false');
@@ -122,7 +130,8 @@ function showConfirmDialog(message, options) {
   return new Promise(function (resolve) {
     confirmDialogResolve = resolve;
     setTimeout(function () {
-      if (confirmModalCancelBtn) confirmModalCancelBtn.focus();
+      var focusBtn = settings.hideCancel ? confirmModalOkBtn : confirmModalCancelBtn;
+      if (focusBtn) focusBtn.focus();
     }, 40);
   });
 }
@@ -2829,6 +2838,16 @@ async function refreshAfterDownload(folder) {
 }
 
 async function startDownload() {
+  // Sin conexión no se puede descargar (yt-dlp necesita internet). Aviso claro.
+  if (!navigator.onLine) {
+    showConfirmDialog(
+      'Para descargar videos necesitas estar conectado a internet. ' +
+      'Conéctate a una red e inténtalo de nuevo.',
+      { title: 'Sin conexión a internet', okLabel: 'Entendido', hideCancel: true }
+    );
+    return;
+  }
+
   if (!canStartDownloadNow()) {
     updateDownloadStartButtonState();
     return;
@@ -4997,34 +5016,27 @@ if (themeApplyBtn) {
   var SPEED = 45; // px por segundo: ritmo de lectura cómodo
   var raf = 0;
   var obs = null;
+  // Texto lógico actual. Se actualiza SOLO cuando código externo cambia el
+  // statusText (el observador se desconecta mientras nosotros montamos el
+  // marquee, así que un disparo del observador = cambio externo real).
+  var logicalText = el.textContent;
 
-  function currentText() {
-    // Si ya está en modo marquee, el texto real está en el dataset.
-    if (el.classList.contains('is-marquee') && el.dataset.mqText != null) {
-      return el.dataset.mqText;
-    }
-    return el.textContent;
-  }
-
-  function apply() {
+  function build() {
     if (obs) obs.disconnect();
-    var text = currentText();
-    // Volver a texto plano para medir el ancho de una línea.
+    // Partir de texto plano para medir el ancho de una línea.
     el.classList.remove('is-marquee');
-    delete el.dataset.mqText;
-    el.textContent = text;
+    el.textContent = logicalText;
 
-    if (el.scrollWidth > el.clientWidth + 1) {
-      // Desborda: construir pista con dos copias.
-      el.dataset.mqText = text;
+    if (logicalText && el.scrollWidth > el.clientWidth + 1) {
+      // Desborda: construir pista con dos copias para el bucle continuo.
       el.classList.add('is-marquee');
       el.textContent = '';
       var track = document.createElement('span');
       track.className = 'status-mq';
       var a = document.createElement('span');
-      a.textContent = text;
+      a.textContent = logicalText;
       var b = document.createElement('span');
-      b.textContent = text;
+      b.textContent = logicalText;
       b.setAttribute('aria-hidden', 'true');
       track.appendChild(a);
       track.appendChild(b);
@@ -5038,12 +5050,19 @@ if (themeApplyBtn) {
     if (obs) obs.observe(el, { childList: true, characterData: true, subtree: true });
   }
 
-  function schedule() {
+  function scheduleBuild() {
     cancelAnimationFrame(raf);
-    raf = requestAnimationFrame(apply);
+    raf = requestAnimationFrame(build);
   }
 
-  obs = new MutationObserver(schedule);
-  window.addEventListener('resize', schedule);
-  schedule();
+  obs = new MutationObserver(function () {
+    // El observador solo dispara por cambios externos (nosotros nos
+    // desconectamos al montar). Ahí el texto nuevo es el textContent actual.
+    logicalText = el.textContent;
+    scheduleBuild();
+  });
+  // Al redimensionar re-evaluamos con el mismo texto lógico (sin leer el DOM,
+  // que en modo marquee tiene el texto duplicado).
+  window.addEventListener('resize', scheduleBuild);
+  scheduleBuild();
 })();
