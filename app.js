@@ -123,6 +123,7 @@ function showConfirmDialog(message, options) {
       confirmModalCancelBtn.textContent = settings.cancelLabel || 'Cancelar';
     }
   }
+  confirmModal.classList.toggle('single-action', Boolean(settings.hideCancel));
 
   confirmModal.classList.add('active');
   confirmModal.setAttribute('aria-hidden', 'false');
@@ -2608,31 +2609,45 @@ function updateControllerPreview(item, mode) {
     return;
   }
 
-  // Video: miniatura muda sincronizada con el reproductor nativo (la posición
-  // se corrige con cada estado que llega en applyNativeState).
+  // Video: miniatura muda que espera al reproductor real. NO arranca sola:
+  // queda en pausa hasta que llega el primer estado del reproductor de la
+  // pantalla 2, y ahí se alinea exacto (posición real). Así nunca va adelantada.
   if (mode === 'video' && activePlayerKind === 'native') {
     controllerPreviewVideo.muted = true;
+    controllerPreviewVideo.preload = 'auto';
+    controllerPreviewVideo.dataset.pendingSync = '1';
     controllerPreviewVideo.src = buildMediaUrl(item);
     controllerPreviewVideo.classList.remove('hidden');
     controllerPreview.classList.remove('hidden');
-    const p = controllerPreviewVideo.play();
-    if (p && typeof p.catch === 'function') p.catch(function () {});
   }
 }
 
 function syncControllerPreview(current, paused) {
-  if (!controllerPreviewVideo || controllerPreviewVideo.classList.contains('hidden')) return;
-  if (controllerPreviewVideo.readyState < 1) return;
+  const v = controllerPreviewVideo;
+  if (!v || v.classList.contains('hidden')) return;
+  if (v.readyState < 1) return;
 
-  // Corregir deriva: la miniatura sigue al reproductor real, no al revés.
-  if (Math.abs((controllerPreviewVideo.currentTime || 0) - current) > 1.2) {
-    try { controllerPreviewVideo.currentTime = current; } catch (e) {}
+  // Primer estado real del reproductor: alinear y recién ahí arrancar.
+  if (v.dataset.pendingSync) {
+    if (paused && current <= 0.05) return; // pantalla 2 aún no reproduce
+    delete v.dataset.pendingSync;
+    try { v.currentTime = current; } catch (e) {}
+    if (!paused) {
+      const p0 = v.play();
+      if (p0 && typeof p0.catch === 'function') p0.catch(function () {});
+    }
+    return;
   }
 
-  if (paused && !controllerPreviewVideo.paused) {
-    controllerPreviewVideo.pause();
-  } else if (!paused && controllerPreviewVideo.paused) {
-    const p = controllerPreviewVideo.play();
+  // Corregir deriva: la miniatura sigue al reproductor real, no al revés.
+  if (Math.abs((v.currentTime || 0) - current) > 0.9) {
+    try { v.currentTime = current; } catch (e) {}
+  }
+
+  if (paused && !v.paused) {
+    v.pause();
+  } else if (!paused && v.paused) {
+    const p = v.play();
     if (p && typeof p.catch === 'function') p.catch(function () {});
   }
 }
@@ -3377,6 +3392,13 @@ function queueNativeSeek(value, immediate) {
   nativeSeekLockUntil = performance.now() + 1400;
   currentTimeEl.textContent = formatTime(nextValue);
   progressBar.value = nextValue;
+
+  // Eco inmediato en la miniatura: se ve el salto al instante, sin esperar
+  // la confirmación del reproductor real.
+  if (controllerPreviewVideo && !controllerPreviewVideo.classList.contains('hidden') &&
+      controllerPreviewVideo.readyState >= 1 && !controllerPreviewVideo.dataset.pendingSync) {
+    try { controllerPreviewVideo.currentTime = nextValue; } catch (e) {}
+  }
 
   if (nativeSeekTimer) {
     clearTimeout(nativeSeekTimer);
