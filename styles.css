@@ -713,6 +713,37 @@ select::-ms-expand {
   backdrop-filter: blur(12px);
 }
 
+/* Vista previa en miniatura: refleja lo que se está mostrando en la otra
+   pantalla, arriba de los controles. */
+.controller-preview {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  width: 100%;
+  max-height: 220px;
+  border-radius: 14px;
+  overflow: hidden;
+  background: #000;
+  border: 1px solid rgba(var(--gold-rgb), 0.22);
+}
+
+.controller-preview.hidden {
+  display: none;
+}
+
+.controller-preview video,
+.controller-preview img {
+  max-width: 100%;
+  max-height: 220px;
+  object-fit: contain;
+  display: block;
+}
+
+.controller-preview video.hidden,
+.controller-preview img.hidden {
+  display: none;
+}
+
 .controller-top {
   text-align: center;
   min-width: 0;

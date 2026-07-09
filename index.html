@@ -392,6 +392,12 @@
 
   <div id="controllerModal" class="controller-modal">
     <div class="controller-card">
+      <!-- Vista previa: cuando el medio se muestra en OTRA pantalla, aquí se ve
+           en miniatura cómo se está comportando, sin quitar los controles. -->
+      <div id="controllerPreview" class="controller-preview hidden">
+        <video id="controllerPreviewVideo" class="hidden" muted playsinline></video>
+        <img id="controllerPreviewImg" class="hidden" alt="Vista previa">
+      </div>
       <div class="controller-top">
         <span>Reproduciendo ahora</span>
         <strong id="songTitle">Sin reproducci&oacute;n</strong>

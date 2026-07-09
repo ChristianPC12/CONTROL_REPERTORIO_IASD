@@ -2569,13 +2569,82 @@ function unlockUI() {
   document.getElementById('uiOverlay').classList.remove('active');
 }
 
-function showController(title, mode) {
+// ─── Vista previa del controlador ────────────────────────────────────────────
+// Cuando el medio se muestra en OTRA pantalla, el controlador enseña una
+// miniatura en vivo para ver cómo se comporta sin mirar la pantalla 2.
+const controllerPreview = document.getElementById('controllerPreview');
+const controllerPreviewVideo = document.getElementById('controllerPreviewVideo');
+const controllerPreviewImg = document.getElementById('controllerPreviewImg');
+
+function clearControllerPreview() {
+  if (!controllerPreview) return;
+  controllerPreview.classList.add('hidden');
+  if (controllerPreviewVideo) {
+    try { controllerPreviewVideo.pause(); } catch (e) {}
+    controllerPreviewVideo.removeAttribute('src');
+    controllerPreviewVideo.load();
+    controllerPreviewVideo.classList.add('hidden');
+  }
+  if (controllerPreviewImg) {
+    controllerPreviewImg.removeAttribute('src');
+    controllerPreviewImg.classList.add('hidden');
+  }
+}
+
+function updateControllerPreview(item, mode) {
+  if (!controllerPreview) return;
+  clearControllerPreview();
+
+  // Solo hay vista previa si el medio va a OTRA pantalla (no la principal) y
+  // el archivo es servible por la app (no archivos sueltos del navegador).
+  if (!item || item.source === 'browser') return;
+  const target = getSelectedMonitorTargetSync();
+  if (!target || target.value === 'main') return;
+
+  if (mode === 'image') {
+    controllerPreviewImg.src = buildMediaUrl(item);
+    controllerPreviewImg.classList.remove('hidden');
+    controllerPreview.classList.remove('hidden');
+    return;
+  }
+
+  // Video: miniatura muda sincronizada con el reproductor nativo (la posición
+  // se corrige con cada estado que llega en applyNativeState).
+  if (mode === 'video' && activePlayerKind === 'native') {
+    controllerPreviewVideo.muted = true;
+    controllerPreviewVideo.src = buildMediaUrl(item);
+    controllerPreviewVideo.classList.remove('hidden');
+    controllerPreview.classList.remove('hidden');
+    const p = controllerPreviewVideo.play();
+    if (p && typeof p.catch === 'function') p.catch(function () {});
+  }
+}
+
+function syncControllerPreview(current, paused) {
+  if (!controllerPreviewVideo || controllerPreviewVideo.classList.contains('hidden')) return;
+  if (controllerPreviewVideo.readyState < 1) return;
+
+  // Corregir deriva: la miniatura sigue al reproductor real, no al revés.
+  if (Math.abs((controllerPreviewVideo.currentTime || 0) - current) > 1.2) {
+    try { controllerPreviewVideo.currentTime = current; } catch (e) {}
+  }
+
+  if (paused && !controllerPreviewVideo.paused) {
+    controllerPreviewVideo.pause();
+  } else if (!paused && controllerPreviewVideo.paused) {
+    const p = controllerPreviewVideo.play();
+    if (p && typeof p.catch === 'function') p.catch(function () {});
+  }
+}
+
+function showController(title, mode, item) {
   controllerModal.classList.add('active');
   controllerModal.classList.toggle('image-mode', mode === 'image');
   songTitle.textContent = title || 'Reproduciendo';
   songTitle.title = title || '';
   setPlayPauseButton(false, false);
   if (mode === 'image') playPauseBtn.textContent = '';
+  updateControllerPreview(item, mode === 'image' ? 'image' : 'video');
   lockUI();
 }
 
@@ -2587,6 +2656,7 @@ function hideController() {
   currentTimeEl.textContent = '00:00';
   durationEl.textContent = '00:00';
   progressBar.value = 0;
+  clearControllerPreview();
   unlockUI();
   stopPlayAll();
 }
@@ -2735,6 +2805,16 @@ function closeDownloadHelpModal() {
 }
 
 function openDownloadModal() {
+  // Sin conexión no tiene sentido entrar: aviso claro y no se abre el modal.
+  if (!navigator.onLine) {
+    showConfirmDialog(
+      'Para usar la función de descargar videos necesitas estar conectado a internet. ' +
+      'Conéctate a una red e inténtalo de nuevo.',
+      { title: 'Sin conexión a internet', okLabel: 'Entendido', hideCancel: true }
+    );
+    return;
+  }
+
   renderDownloadFolderOptions();
   resetDownloadProgress();
 
@@ -3257,6 +3337,9 @@ function applyNativeState(state) {
     setPlayPauseButton(Boolean(state.paused), false);
   }
 
+  // Mantener la miniatura del controlador alineada con el reproductor real.
+  syncControllerPreview(current, Boolean(state.paused));
+
   if (state.error) {
     statusText.textContent = 'No se pudo reproducir el video: ' + state.error;
   }
@@ -3441,7 +3524,7 @@ function startPlayerReadyWatchdog(item, sid) {
 
     if (attempts === 2) {
       if (shouldShowPresentationController(item)) {
-        showController(item.title, kind === 'image' ? 'image' : 'video');
+        showController(item.title, kind === 'image' ? 'image' : 'video', item);
       } else {
         hideController();
       }
@@ -3491,7 +3574,7 @@ async function launchPlayerWindow(item) {
     positionPlayerWindow('launch_direct');
 
     if (item && shouldShowPresentationController(item)) {
-      showController(item.title, isImage ? 'image' : 'video');
+      showController(item.title, isImage ? 'image' : 'video', item);
     } else if (isImage) {
       hideController();
     }
@@ -3775,7 +3858,7 @@ function sendMediaToPlayer(item) {
   });
 
   if (shouldShowPresentationController(item)) {
-    showController(item.title, isImage ? 'image' : 'video');
+    showController(item.title, isImage ? 'image' : 'video', item);
   } else {
     hideController();
   }
@@ -3829,7 +3912,7 @@ async function launchWindowsPlayer(item) {
 
     playerLaunching = false;
     if (!isImage || showImageController) {
-      showController(item.title, isImage ? 'image' : 'video');
+      showController(item.title, isImage ? 'image' : 'video', item);
     }
     startNativeStatePolling();
     statusText.textContent = (isImage ? 'Imagen en pantalla: ' : 'Reproduciendo en monitor externo: ') + item.title;
@@ -3885,7 +3968,7 @@ async function loadItemInNativePlayer(item) {
     }
 
     if (shouldShowPresentationController(item)) {
-      showController(item.title, kind === 'image' ? 'image' : 'video');
+      showController(item.title, kind === 'image' ? 'image' : 'video', item);
     } else if (kind === 'image') {
       hideController();
     }
@@ -5014,8 +5097,10 @@ if (themeApplyBtn) {
   var el = document.getElementById('statusText');
   if (!el) return;
   var SPEED = 45; // px por segundo: ritmo de lectura cómodo
+  var HOLD_MS = 8000; // cuánto vive un mensaje corto antes de ocultarse
   var raf = 0;
   var obs = null;
+  var hideTimer = 0;
   // Texto lógico actual. Se actualiza SOLO cuando código externo cambia el
   // statusText (el observador se desconecta mientras nosotros montamos el
   // marquee, así que un disparo del observador = cambio externo real).
@@ -5023,10 +5108,12 @@ if (themeApplyBtn) {
 
   function build() {
     if (obs) obs.disconnect();
+    clearTimeout(hideTimer);
     // Partir de texto plano para medir el ancho de una línea.
     el.classList.remove('is-marquee');
     el.textContent = logicalText;
 
+    var holdMs = HOLD_MS;
     if (logicalText && el.scrollWidth > el.clientWidth + 1) {
       // Desborda: construir pista con dos copias para el bucle continuo.
       el.classList.add('is-marquee');
@@ -5045,6 +5132,17 @@ if (themeApplyBtn) {
       var half = a.offsetWidth; // incluye la separación (padding-right)
       var dur = Math.max(6, half / SPEED);
       track.style.animationDuration = dur.toFixed(2) + 's';
+      // Mensajes largos viven lo suficiente para leerse ~2 vueltas completas.
+      holdMs = Math.max(HOLD_MS, dur * 2 * 1000);
+    }
+
+    // El mensaje se muestra un rato y luego se quita solo: la interacción ya
+    // pasó. Un mensaje nuevo reinicia el temporizador.
+    if (logicalText) {
+      hideTimer = setTimeout(function () {
+        logicalText = '';
+        scheduleBuild();
+      }, holdMs);
     }
 
     if (obs) obs.observe(el, { childList: true, characterData: true, subtree: true });

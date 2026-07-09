@@ -3478,13 +3478,24 @@ if ($action === 'download_start') {
     $psScript .= "  \$ytArgs += '--no-playlist'\r\n";
     $psScript .= "}\r\n";
 
-    $psScript .= "\$nodeCmd = Get-Command node -ErrorAction SilentlyContinue\r\n";
-    $psScript .= "if (\$nodeCmd) {\r\n";
+    // Node empaquetado con la app (runtime\node\node.exe) tiene prioridad:
+    // así las descargas funcionan para TODOS los usuarios aunque no tengan
+    // Node.js instalado. Fallback: node del sistema (PATH).
+    $bundledNode = dirname(__DIR__) . DIRECTORY_SEPARATOR . 'node' . DIRECTORY_SEPARATOR . 'node.exe';
+    $psScript .= "\$bundledNode = " . psQuote($bundledNode) . "\r\n";
+    $psScript .= "if (Test-Path -LiteralPath \$bundledNode) {\r\n";
     $psScript .= "  \$ytArgs += '--js-runtimes'\r\n";
-    $psScript .= "  \$ytArgs += ('node:' + \$nodeCmd.Source)\r\n";
-    $psScript .= "  Write-Log ('JS runtime: node (' + \$nodeCmd.Source + ')')\r\n";
+    $psScript .= "  \$ytArgs += ('node:' + \$bundledNode)\r\n";
+    $psScript .= "  Write-Log ('JS runtime: node empaquetado (' + \$bundledNode + ')')\r\n";
     $psScript .= "} else {\r\n";
-    $psScript .= "  Write-Log 'JS runtime: no se detecto node; yt-dlp usara su configuracion por defecto.'\r\n";
+    $psScript .= "  \$nodeCmd = Get-Command node -ErrorAction SilentlyContinue\r\n";
+    $psScript .= "  if (\$nodeCmd) {\r\n";
+    $psScript .= "    \$ytArgs += '--js-runtimes'\r\n";
+    $psScript .= "    \$ytArgs += ('node:' + \$nodeCmd.Source)\r\n";
+    $psScript .= "    Write-Log ('JS runtime: node (' + \$nodeCmd.Source + ')')\r\n";
+    $psScript .= "  } else {\r\n";
+    $psScript .= "    Write-Log 'JS runtime: no se detecto node; yt-dlp usara su configuracion por defecto.'\r\n";
+    $psScript .= "  }\r\n";
     $psScript .= "}\r\n";
 
     $psScript .= "if (\$limitedPlaylist) {\r\n";
@@ -3691,7 +3702,6 @@ if ($action === 'download_start') {
     $psScript .= "  Write-Log ('La descarga terminó con error. Código: ' + \$code)\r\n";
     $psScript .= "}\r\n";
 
-    $psScript .= "Read-Host 'Presiona ENTER para cerrar'\r\n";
     $psScript .= "exit \$code\r\n";
 
     $psScriptWithBom = "\xEF\xBB\xBF" . $psScript;
@@ -3700,16 +3710,11 @@ if ($action === 'download_start') {
         sendJson(['error' => 'No se pudo crear el script interno de descarga.']);
     }
 
-    $batContent = "@echo off\r\n";
-    $batContent .= "chcp 65001 >nul\r\n";
-    $batContent .= "title Descargando\r\n";
-    $batContent .= "powershell -NoProfile -ExecutionPolicy Bypass -File " . cmdQuote($files['ps1']) . "\r\n";
-
-    if (file_put_contents($files['bat'], $batContent) === false) {
-        sendJson(['error' => 'No se pudo crear el archivo BAT interno.']);
-    }
-
-    $cmd = 'cmd /c start "Descargando" ' . cmdQuote($files['bat']);
+    // Consola oculta: el usuario final sigue el avance con la barra de
+    // progreso de la app; la ventana negra no aporta nada. El progreso se
+    // sigue leyendo del .log y la cancelación usa el PID (independiente de
+    // la ventana).
+    $cmd = 'cmd /c start "" /min powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ' . cmdQuote($files['ps1']);
 
     logDebug('Comando CMD generado', [
         'cmd' => $cmd,
