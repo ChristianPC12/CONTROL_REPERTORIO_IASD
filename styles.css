@@ -737,6 +737,14 @@ select::-ms-expand {
   max-height: 220px;
   object-fit: contain;
   display: block;
+  /* Fade suave al cambiar de medio (evita el corte brusco). */
+  opacity: 1;
+  transition: opacity 0.28s ease;
+}
+
+.controller-preview video.is-loading,
+.controller-preview img.is-loading {
+  opacity: 0;
 }
 
 .controller-preview video.hidden,

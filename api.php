@@ -2338,6 +2338,8 @@ public class CMNativeWinApi {
   $script:hasMedia = $false
   $script:idleDeadlineMs = 0
   $script:lastStateWriteMs = 0
+  $script:unmuteOnPlay = $false
+  $script:unmuteSetMs = 0
   $script:nav = ''
   $script:navId = ''
   $script:lastNavAt = 0
@@ -2444,8 +2446,12 @@ public class CMWmpHost : AxHost {
       $script:endedCloseDue = 0
       $script:hasPlayed = $false
       Write-CMNativeState 0 0 $true $false ''
-      # Detener el medio anterior ANTES de cambiar la URL: sin esto se escucha
-      # una fracción del video anterior al cambiar de video.
+      # Silencio durante la transición: aunque se haga stop(), WMP puede dejar
+      # sonar un instante del medio anterior. Se silencia aquí y se reactiva
+      # el audio en el tick cuando el medio NUEVO ya está reproduciendo.
+      try { $script:wmp.settings.mute = $true } catch {}
+      $script:unmuteOnPlay = $true
+      $script:unmuteSetMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
       try { $script:wmp.controls.stop() } catch {}
       $script:wmp.URL = $path
       $script:wmp.controls.currentPosition = 0
@@ -2523,6 +2529,11 @@ public class CMWmpHost : AxHost {
               } elseif ($commandType -eq 'seek') {
                 $seconds = [double]$command.time
                 if ($seconds -lt 0) { $seconds = 0 }
+                # Silenciar mientras WMP salta de posición: si no, se sigue
+                # oyendo el punto anterior una fracción de segundo.
+                try { $script:wmp.settings.mute = $true } catch {}
+                $script:unmuteOnPlay = $true
+                $script:unmuteSetMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
                 $script:wmp.controls.currentPosition = $seconds
               } elseif ($commandType -eq 'load') {
                 $nextPath = [string]$command.filePath
@@ -2569,6 +2580,16 @@ public class CMWmpHost : AxHost {
           try { $stateCode = [int]$script:wmp.playState } catch {}
           if ($stateCode -eq 3 -or $current -gt 0.2) {
             $script:hasPlayed = $true
+          }
+
+          # Reactivar audio cuando el medio nuevo ya reproduce (o tras 1.5s
+          # como red de seguridad si quedó en pausa).
+          if ($script:unmuteOnPlay) {
+            $nowUnmuteMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+            if ($stateCode -eq 3 -or ($nowUnmuteMs - $script:unmuteSetMs) -ge 1500) {
+              try { $script:wmp.settings.mute = $false } catch {}
+              $script:unmuteOnPlay = $false
+            }
           }
 
           $ended = $stateCode -eq 8 -or ($script:hasPlayed -and $stateCode -eq 1 -and $duration -gt 0)

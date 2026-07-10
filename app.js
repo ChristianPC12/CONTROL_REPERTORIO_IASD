@@ -2606,6 +2606,10 @@ function updateControllerPreview(item, mode) {
   if (!target || target.value === 'main') return;
 
   if (mode === 'image') {
+    controllerPreviewImg.classList.add('is-loading');
+    controllerPreviewImg.onload = function () {
+      controllerPreviewImg.classList.remove('is-loading');
+    };
     controllerPreviewImg.src = buildMediaUrl(item);
     controllerPreviewImg.classList.remove('hidden');
     controllerPreview.classList.remove('hidden');
@@ -2619,22 +2623,35 @@ function updateControllerPreview(item, mode) {
     controllerPreviewVideo.muted = true;
     controllerPreviewVideo.preload = 'auto';
     controllerPreviewVideo.dataset.pendingSync = '1';
+    controllerPreviewVideo.classList.add('is-loading'); // fade-in al sincronizar
     controllerPreviewVideo.src = buildMediaUrl(item);
     controllerPreviewVideo.classList.remove('hidden');
     controllerPreview.classList.remove('hidden');
   }
 }
 
-function syncControllerPreview(current, paused) {
+function syncControllerPreview(current, paused, stateTs) {
   const v = controllerPreviewVideo;
   if (!v || v.classList.contains('hidden')) return;
   if (v.readyState < 1) return;
+
+  // Posición objetivo con compensación de latencia: el estado se escribió en
+  // stateTs (epoch ms del host, mismo reloj); lo que haya pasado desde
+  // entonces el video real ya lo avanzó.
+  let target = Math.max(0, Number(current) || 0);
+  if (!paused && stateTs) {
+    target += Math.min(2, Math.max(0, (Date.now() - stateTs) / 1000));
+  }
 
   // Primer estado real del reproductor: alinear y recién ahí arrancar.
   if (v.dataset.pendingSync) {
     if (paused && current <= 0.05) return; // pantalla 2 aún no reproduce
     delete v.dataset.pendingSync;
-    try { v.currentTime = current; } catch (e) {}
+    // Ventana de asentamiento: mientras el elemento buffea el archivo nuevo
+    // reporta posiciones falsas; corregir ahí produce tirones visibles.
+    v.dataset.settleUntil = String(performance.now() + 1800);
+    try { v.currentTime = target; } catch (e) {}
+    v.classList.remove('is-loading');
     if (!paused) {
       const p0 = v.play();
       if (p0 && typeof p0.catch === 'function') p0.catch(function () {});
@@ -2642,9 +2659,15 @@ function syncControllerPreview(current, paused) {
     return;
   }
 
+  // Mientras el usuario arrastra la barra (lock de seek) no se corrige la
+  // posición: la miniatura ya saltó con el eco y el reproductor real está
+  // alcanzándola; corregir aquí producía tirones de ida y vuelta.
+  const inSeekLock = performance.now() < nativeSeekLockUntil;
+  const settling = Number(v.dataset.settleUntil || 0) > performance.now();
+
   // Corregir deriva: la miniatura sigue al reproductor real, no al revés.
-  if (Math.abs((v.currentTime || 0) - current) > 0.9) {
-    try { v.currentTime = current; } catch (e) {}
+  if (!inSeekLock && !settling && Math.abs((v.currentTime || 0) - target) > 0.4) {
+    try { v.currentTime = target; } catch (e) {}
   }
 
   if (paused && !v.paused) {
@@ -3381,7 +3404,7 @@ function applyNativeState(state) {
   }
 
   // Mantener la miniatura del controlador alineada con el reproductor real.
-  syncControllerPreview(current, Boolean(state.paused));
+  syncControllerPreview(current, Boolean(state.paused), Number(state.ts) || 0);
 
   if (state.error) {
     statusText.textContent = 'No se pudo reproducir el video: ' + state.error;
