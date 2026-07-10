@@ -481,7 +481,10 @@ function formatTime(s) {
 }
 
 function buildMediaUrl(item) {
-  return 'api.php?action=play'
+  // CM_MEDIA_BASE: en la app empaquetada el streaming va por un servidor php
+  // dedicado (otro puerto) para no bloquear la API de control (php -S atiende
+  // una petición a la vez en Windows). En Apache/dev queda mismo origen.
+  return (window.CM_MEDIA_BASE || '') + 'api.php?action=play'
     + '&folder=' + encodeURIComponent(item.folder)
     + '&file=' + encodeURIComponent(item.name);
 }
@@ -3260,6 +3263,19 @@ async function nativePlayerCommand(type, extra) {
     body: form
   });
 }
+
+// Hook de diagnóstico (solo lectura) del estado interno del reproductor.
+window.cmDebugState = function () {
+  return {
+    sid: activePlayerSid,
+    kind: activePlayerKind,
+    mode: playbackMode,
+    alive: playerAlive,
+    launching: playerLaunching,
+    polling: Boolean(nativeStatePollTimer),
+    prewarm: prewarmNativeSid
+  };
+};
 
 function stopNativeStatePolling() {
   if (nativeStatePollTimer) {

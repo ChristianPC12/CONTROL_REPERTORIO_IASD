@@ -2337,6 +2337,7 @@ public class CMNativeWinApi {
   $script:hasPlayed = $false
   $script:hasMedia = $false
   $script:idleDeadlineMs = 0
+  $script:lastStateWriteMs = 0
   $script:nav = ''
   $script:navId = ''
   $script:lastNavAt = 0
@@ -2443,6 +2444,9 @@ public class CMWmpHost : AxHost {
       $script:endedCloseDue = 0
       $script:hasPlayed = $false
       Write-CMNativeState 0 0 $true $false ''
+      # Detener el medio anterior ANTES de cambiar la URL: sin esto se escucha
+      # una fracción del video anterior al cambiar de video.
+      try { $script:wmp.controls.stop() } catch {}
       $script:wmp.URL = $path
       $script:wmp.controls.currentPosition = 0
       $script:wmp.controls.play()
@@ -2487,7 +2491,9 @@ public class CMWmpHost : AxHost {
     $timer.Add_Tick({
       try {
         # ESC solo cierra cuando hay medio visible (no mata al host idle).
-        if ($script:hasMedia -and (([CMNativeWinApi]::GetAsyncKeyState(0x1B) -band 0x8000) -ne 0)) {
+        # 0x8001: bit alto = tecla abajo ahora; bit bajo = se pulsó desde el
+        # último chequeo (atrapa pulsaciones breves entre ticks).
+        if ($script:hasMedia -and (([CMNativeWinApi]::GetAsyncKeyState(0x1B) -band 0x8001) -ne 0)) {
           $form.Close()
           return
         }
@@ -2588,7 +2594,14 @@ public class CMWmpHost : AxHost {
               return
             }
           } else {
-            Write-CMNativeState $current $duration $script:isPaused $false ''
+            # Escribir estado cada ~350 ms (no en cada tick): el tick corre en
+            # el hilo de la UI y escribir a disco 8 veces/s producia
+            # micro-trabones en la reproduccion.
+            $nowStateMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+            if (($nowStateMs - $script:lastStateWriteMs) -ge 350) {
+              $script:lastStateWriteMs = $nowStateMs
+              Write-CMNativeState $current $duration $script:isPaused $false ''
+            }
           }
         }
       } catch {
@@ -2917,7 +2930,9 @@ function runNativePlayerPowerShell($sid, $filePath, $mediaType, $left, $top, $wi
         return true;
     }
 
-    $cmd = 'cmd /c start "" powershell.exe -NoProfile -WindowStyle Hidden -STA -ExecutionPolicy Bypass -File ' . cmdQuote($ps1);
+    // /min: sin esto, "start" muestra la consola un instante antes de que
+    // -WindowStyle Hidden la oculte; el usuario final no debe verla.
+    $cmd = 'cmd /c start "" /min powershell.exe -NoProfile -WindowStyle Hidden -STA -ExecutionPolicy Bypass -File ' . cmdQuote($ps1);
     return runDetachedCommand($cmd);
 }
 

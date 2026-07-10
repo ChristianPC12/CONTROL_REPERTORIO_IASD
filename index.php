@@ -23,4 +23,13 @@ foreach ($assets as $asset) {
     $html = preg_replace('/' . preg_quote($asset, '/') . '\?v=\d+/', $asset . '?v=' . $version, $html);
 }
 
+// Servidor de media dedicado (app empaquetada): php -S atiende una petición a
+// la vez en Windows, así que el streaming de video/audio va por un segundo
+// proceso en otro puerto para no bloquear la API de control.
+$mediaPort = intval(getenv('CM_MEDIA_PORT'));
+if ($mediaPort > 0) {
+    $mediaScript = '<script>window.CM_MEDIA_BASE = "http://127.0.0.1:' . $mediaPort . '/";</script>';
+    $html = str_replace('</head>', $mediaScript . "\n</head>", $html);
+}
+
 echo $html;
