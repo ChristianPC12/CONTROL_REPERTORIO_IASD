@@ -3244,6 +3244,15 @@ async function nativePlayerCommand(type, extra) {
     form.append('folder', extra.item.folder || '');
     form.append('file', extra.item.name || '');
     form.append('mediaType', extra.item.kind || currentMediaType);
+
+    // Coordenadas del monitor elegido: el host se reposiciona en cada load.
+    const target = (extra && extra.target) || getSelectedMonitorTargetSync();
+    if (target) {
+      form.append('left', String(Math.round(target.left)));
+      form.append('top', String(Math.round(target.top)));
+      form.append('width', String(Math.round(target.width)));
+      form.append('height', String(Math.round(target.height)));
+    }
   }
 
   return apiJson('api.php?action=native_player_command&sid=' + encodeURIComponent(activePlayerSid), {
@@ -3288,6 +3297,9 @@ function handleNativeClosed(state) {
   const wasPlaylist = isPlayAllMode;
 
   resetNativeSessionState();
+
+  // Dejar listo un host precalentado para que el próximo video arranque ya.
+  schedulePrewarmNativePlayer(1500);
 
   if (wasEnded && wasPlaylist) {
     statusText.textContent = 'Video finalizado. Reproduciendo siguiente...';
@@ -3896,6 +3908,53 @@ function sendMediaToPlayer(item) {
   }
 }
 
+// ─── Pre-calentado del reproductor nativo ────────────────────────────────────
+// Arranca el host de video (PowerShell + WMP) con la ventana oculta, ANTES de
+// que el usuario pida un video. El primer play se convierte en un simple
+// comando 'load' sobre el host ya listo => arranque casi instantáneo.
+let prewarmNativeSid = '';
+let prewarmNativeTimer = null;
+
+function schedulePrewarmNativePlayer(delayMs) {
+  if (prewarmNativeTimer) clearTimeout(prewarmNativeTimer);
+  prewarmNativeTimer = setTimeout(function () {
+    prewarmNativeTimer = null;
+    prewarmNativePlayer();
+  }, Math.max(0, delayMs || 0));
+}
+
+async function prewarmNativePlayer() {
+  if (activePlayerSid || prewarmNativeSid) return;
+
+  const sid = makePlayerSid();
+  const target = getSelectedMonitorTargetSync();
+
+  try {
+    const data = await apiJson(buildPlayerActionUrl('prewarm_native_player', sid, target));
+    if (data && data.ok) {
+      prewarmNativeSid = sid;
+    }
+  } catch (e) {
+    console.warn('[Player nativo] Prewarm falló:', e.message);
+  }
+}
+
+// Devuelve el sid del host precalentado si está vivo y fresco; si no, ''.
+async function claimPrewarmedNativePlayer() {
+  const sid = prewarmNativeSid;
+  if (!sid) return '';
+  prewarmNativeSid = '';
+
+  try {
+    const data = await apiJson('api.php?action=native_player_state&sid=' + encodeURIComponent(sid));
+    const s = data && data.state;
+    const fresh = s && !s.closed && Number(s.ts) && (Date.now() - Number(s.ts) < 4000);
+    if (fresh) return sid;
+  } catch (e) {}
+
+  return '';
+}
+
 async function launchWindowsPlayer(item) {
   if (!item) return false;
   if (item.source === 'browser') {
@@ -3907,6 +3966,28 @@ async function launchWindowsPlayer(item) {
 
   if (isLocalAudioActive()) {
     stopLocalAudio();
+  }
+
+  // Ruta rápida: si hay un host de video precalentado, se adopta y el play es
+  // solo un 'load' (el host se revela ya posicionado en el monitor elegido).
+  if (!isImage && !activePlayerSid) {
+    const warmSid = await claimPrewarmedNativePlayer();
+    if (warmSid) {
+      activePlayerSid = warmSid;
+      activePlayerKind = 'native';
+      endedHandledSid = '';
+      lastNativeNavId = '';
+      playerAlive = true;
+      playerLaunching = false;
+      playbackMode = 'external';
+      pendingPlayerItem = null;
+
+      const loaded = await loadItemInNativePlayer(item);
+      if (loaded) return true;
+
+      // El host murió entre medio: limpiar y seguir con el arranque normal.
+      resetNativeSessionState();
+    }
   }
 
   if (activePlayerSid) {
@@ -4763,6 +4844,10 @@ resetConfiguredFoldersFromUrl()
     renderLibrary();
   })
   .finally(startScreenDetectionDeferred);
+
+// Pre-calentar el reproductor nativo poco después del arranque (fuera del
+// camino crítico): el primer video se abre casi al instante.
+schedulePrewarmNativePlayer(2500);
 
 // ─── Temas (selector de paleta) ───────────────────────────────
 // Etapa 1: solo vista previa visual. "Aplicar" aún no persiste el tema;

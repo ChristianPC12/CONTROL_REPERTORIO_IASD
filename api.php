@@ -2240,6 +2240,8 @@ function writeNativePlayerPowerShell($sid, $filePath, $mediaType, $left, $top, $
     $ps .= "\$log = " . psQuote($files['log']) . "\r\n";
     $ps .= "\$stateFile = " . psQuote($files['state']) . "\r\n";
     $ps .= "\$commandFile = " . psQuote($files['command']) . "\r\n";
+    // Modo pre-calentado: sin archivo => host listo pero oculto, espera 'load'.
+    $ps .= "\$idleStart = " . ($filePath === '' ? '$true' : '$false') . "\r\n";
 
     // Rutas de DLLs cacheadas para los componentes C#. Compilar (csc) en cada
     // arranque de PowerShell es lento en discos lentos/gama baja; al cachear el
@@ -2333,6 +2335,8 @@ public class CMNativeWinApi {
   $script:lastCommandId = ''
   $script:endedCloseDue = 0
   $script:hasPlayed = $false
+  $script:hasMedia = $false
+  $script:idleDeadlineMs = 0
   $script:nav = ''
   $script:navId = ''
   $script:lastNavAt = 0
@@ -2370,6 +2374,14 @@ public class CMWmpHost : AxHost {
     $form.KeyPreview = $true
     $form.Cursor = [System.Windows.Forms.Cursors]::None
     $form.SetBounds($left, $top, $width, $height)
+
+    if ($idleStart) {
+      # Pre-calentado: ventana invisible y fuera de pantalla hasta el primer
+      # 'load'. Si nadie la usa en 30 min, se cierra sola.
+      $form.Opacity = 0
+      $form.SetBounds(-32000, -32000, 320, 180)
+      $script:idleDeadlineMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() + 1800000
+    }
 
     $wmpHost = New-Object CMWmpHost
     $wmpHost.Dock = [System.Windows.Forms.DockStyle]::Fill
@@ -2447,8 +2459,13 @@ public class CMWmpHost : AxHost {
         $script:wmp.settings.autoStart = $true
         $script:wmp.settings.volume = 100
         $script:wmp.settings.mute = $false
-        Start-CMWmpFile $filePath
-        Show-CMWmpWindow 'shown-video'
+        if (-not $idleStart) {
+          $script:hasMedia = $true
+          Start-CMWmpFile $filePath
+          Show-CMWmpWindow 'shown-video'
+        } else {
+          Write-CMNativeLog 'Host WMP precalentado (idle): listo, esperando load'
+        }
       } catch {
         Write-CMNativeLog ('ERROR WMP Shown: ' + $_.Exception.Message)
         Write-CMNativeState 0 0 $true $false $_.Exception.Message
@@ -2464,10 +2481,20 @@ public class CMWmpHost : AxHost {
     })
 
     $timer = New-Object System.Windows.Forms.Timer
-    $timer.Interval = 250
+    # 120 ms: los comandos (load/seek/pause) se recogen casi al instante sin
+    # costo apreciable de CPU.
+    $timer.Interval = 120
     $timer.Add_Tick({
       try {
-        if (([CMNativeWinApi]::GetAsyncKeyState(0x1B) -band 0x8000) -ne 0) {
+        # ESC solo cierra cuando hay medio visible (no mata al host idle).
+        if ($script:hasMedia -and (([CMNativeWinApi]::GetAsyncKeyState(0x1B) -band 0x8000) -ne 0)) {
+          $form.Close()
+          return
+        }
+
+        if (-not $script:hasMedia -and $script:idleDeadlineMs -gt 0 -and
+            [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() -ge $script:idleDeadlineMs) {
+          Write-CMNativeLog 'Idle sin uso: cerrando host precalentado'
           $form.Close()
           return
         }
@@ -2495,6 +2522,18 @@ public class CMWmpHost : AxHost {
                 $nextPath = [string]$command.filePath
                 $nextType = [string]$command.mediaType
                 if ($nextType -eq 'video' -and -not [string]::IsNullOrWhiteSpace($nextPath) -and (Test-Path -LiteralPath $nextPath)) {
+                  # Coordenadas frescas del monitor elegido (si vienen): el host
+                  # se reposiciona en cada load, incluido el primer load tras
+                  # el pre-calentado.
+                  if ($command.PSObject.Properties['left'] -and $command.PSObject.Properties['width']) {
+                    $script:left = [int]$command.left
+                    $script:top = [int]$command.top
+                    $script:width = [int]$command.width
+                    $script:height = [int]$command.height
+                  }
+                  $script:hasMedia = $true
+                  $script:idleDeadlineMs = 0
+                  try { $form.Opacity = 1 } catch {}
                   Start-CMWmpFile $nextPath
                   Show-CMWmpWindow 'load-video'
                 }
@@ -2882,7 +2921,7 @@ function runNativePlayerPowerShell($sid, $filePath, $mediaType, $left, $top, $wi
     return runDetachedCommand($cmd);
 }
 
-if (in_array($action, ['launch_player', 'launch_native_player', 'native_player_state', 'native_player_command', 'position_player', 'close_player', 'activate_player'], true)) {
+if (in_array($action, ['launch_player', 'launch_native_player', 'prewarm_native_player', 'native_player_state', 'native_player_command', 'position_player', 'close_player', 'activate_player'], true)) {
     $sid = trim($_GET['sid'] ?? '');
 
     if (!safePlayerSid($sid)) {
@@ -2970,6 +3009,16 @@ if (in_array($action, ['launch_player', 'launch_native_player', 'native_player_s
             $payload['filePath'] = $filePath;
             $payload['mediaType'] = $mediaType;
             $payload['file'] = basename($filePath);
+
+            // Coordenadas del monitor elegido: el host se reposiciona en cada
+            // load (necesario para revelar el host precalentado en la pantalla
+            // correcta y para cambios de monitor entre videos).
+            if (isset($_POST['left'], $_POST['top'], $_POST['width'], $_POST['height'])) {
+                $payload['left'] = intval($_POST['left']);
+                $payload['top'] = intval($_POST['top']);
+                $payload['width'] = intval($_POST['width']);
+                $payload['height'] = intval($_POST['height']);
+            }
         }
 
         if (@file_put_contents($nativeFiles['command'], json_encode($payload, JSON_UNESCAPED_UNICODE) . PHP_EOL, LOCK_EX) === false) {
@@ -2977,6 +3026,16 @@ if (in_array($action, ['launch_player', 'launch_native_player', 'native_player_s
         }
 
         sendJson(['ok' => true, 'sid' => $sid, 'command' => $payload]);
+    }
+
+    if ($action === 'prewarm_native_player') {
+        // Pre-calienta el host nativo de video: PowerShell + WMP quedan listos
+        // con la ventana oculta. El primer play se reduce a un 'load' (rápido).
+        if (!runNativePlayerPowerShell($sid, '', 'video', $left, $top, $width, $height, $playerJobsPath)) {
+            sendJson(['error' => 'No se pudo precalentar el reproductor.']);
+        }
+
+        sendJson(['ok' => true, 'mode' => 'prewarm_native_player', 'sid' => $sid]);
     }
 
     if ($action === 'launch_native_player') {
