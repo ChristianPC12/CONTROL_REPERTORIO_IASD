@@ -716,6 +716,7 @@ select::-ms-expand {
 /* Vista previa en miniatura: refleja lo que se está mostrando en la otra
    pantalla, arriba de los controles. */
 .controller-preview {
+  position: relative;
   display: flex;
   justify-content: center;
   align-items: center;
@@ -727,12 +728,53 @@ select::-ms-expand {
   border: 1px solid rgba(var(--gold-rgb), 0.22);
 }
 
+/* Logos del tema flotando en las franjas negras laterales (mismo mecido y
+   parpadeo de llama que el logo del panel derecho; color según paleta). */
+.controller-preview::before,
+.controller-preview::after {
+  content: "";
+  position: absolute;
+  top: calc(50% - 26px);
+  width: 58px;
+  aspect-ratio: 835 / 747;
+  background-color: var(--gold);
+  -webkit-mask: url("logo_iasd_mark.png") center / contain no-repeat;
+  mask: url("logo_iasd_mark.png") center / contain no-repeat;
+  opacity: 0.9;
+  z-index: 0;
+  pointer-events: none;
+}
+
+.controller-preview::before {
+  left: 18px;
+  animation:
+    brand-logo-float 9s ease-in-out infinite,
+    brand-logo-flicker 3.4s ease-in-out infinite;
+}
+
+.controller-preview::after {
+  right: 18px;
+  /* Desfasado para que ambos no se muevan en espejo exacto. */
+  animation:
+    brand-logo-float 9s ease-in-out 1.7s infinite,
+    brand-logo-flicker 3.4s ease-in-out 0.9s infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .controller-preview::before,
+  .controller-preview::after {
+    animation: none;
+  }
+}
+
 .controller-preview.hidden {
   display: none;
 }
 
 .controller-preview video,
 .controller-preview img {
+  position: relative;
+  z-index: 1; /* por delante de los logos laterales */
   max-width: 100%;
   max-height: 220px;
   object-fit: contain;

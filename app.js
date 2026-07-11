@@ -2601,17 +2601,36 @@ function clearControllerPreview() {
   }
 }
 
+// Token de cambio: invalida swaps diferidos si llega otro cambio en medio.
+let previewSwapToken = 0;
+
+function setPreviewVideoSource(item) {
+  // Miniatura muda que espera al reproductor real. NO arranca sola: queda en
+  // pausa hasta el primer estado de la pantalla 2 y ahí se alinea exacto.
+  controllerPreviewVideo.muted = true;
+  controllerPreviewVideo.preload = 'auto';
+  controllerPreviewVideo.dataset.pendingSync = '1';
+  controllerPreviewVideo.classList.add('is-loading'); // fade-in al sincronizar
+  controllerPreviewVideo.src = buildMediaUrl(item);
+  controllerPreviewVideo.classList.remove('hidden');
+  controllerPreview.classList.remove('hidden');
+}
+
 function updateControllerPreview(item, mode) {
   if (!controllerPreview) return;
-  clearControllerPreview();
+  const token = ++previewSwapToken;
 
   // Solo hay vista previa si el medio va a OTRA pantalla (no la principal) y
   // el archivo es servible por la app (no archivos sueltos del navegador).
-  if (!item || item.source === 'browser') return;
   const target = getSelectedMonitorTargetSync();
-  if (!target || target.value === 'main') return;
+  const eligible = item && item.source !== 'browser' && target && target.value !== 'main';
+  if (!eligible) {
+    clearControllerPreview();
+    return;
+  }
 
   if (mode === 'image') {
+    clearControllerPreview();
     controllerPreviewImg.classList.add('is-loading');
     controllerPreviewImg.onload = function () {
       controllerPreviewImg.classList.remove('is-loading');
@@ -2622,18 +2641,27 @@ function updateControllerPreview(item, mode) {
     return;
   }
 
-  // Video: miniatura muda que espera al reproductor real. NO arranca sola:
-  // queda en pausa hasta que llega el primer estado del reproductor de la
-  // pantalla 2, y ahí se alinea exacto (posición real). Así nunca va adelantada.
   if (mode === 'video' && activePlayerKind === 'native') {
-    controllerPreviewVideo.muted = true;
-    controllerPreviewVideo.preload = 'auto';
-    controllerPreviewVideo.dataset.pendingSync = '1';
-    controllerPreviewVideo.classList.add('is-loading'); // fade-in al sincronizar
-    controllerPreviewVideo.src = buildMediaUrl(item);
-    controllerPreviewVideo.classList.remove('hidden');
-    controllerPreview.classList.remove('hidden');
+    const v = controllerPreviewVideo;
+    const switching = v && !v.classList.contains('hidden') && v.currentSrc;
+
+    if (switching) {
+      // Cross-fade: fundir a negro el cuadro actual (0.28s), luego cambiar la
+      // fuente; el nuevo aparece fundiendo cuando sincroniza. Sin cortes
+      // bruscos ni distorsión.
+      v.classList.add('is-loading');
+      setTimeout(function () {
+        if (token !== previewSwapToken) return; // llegó otro cambio en medio
+        setPreviewVideoSource(item);
+      }, 240);
+    } else {
+      clearControllerPreview();
+      setPreviewVideoSource(item);
+    }
+    return;
   }
+
+  clearControllerPreview();
 }
 
 // Estadísticas del preview (diagnóstico): saltos duros y esperas de buffer.
@@ -3399,6 +3427,12 @@ function handleNativeClosed(state) {
 
 function applyNativeState(state) {
   if (!state || activePlayerKind !== 'native' || (playbackMode !== 'external' && playbackMode !== 'image')) return;
+
+  // Estado vacío o de otra sesión (race: la API leyó justo mientras el host
+  // reemplazaba el archivo). Ignorarlo; el siguiente poll trae el bueno.
+  // Sin esto, un {} se interpretaba como current=0 y reiniciaba la barra y
+  // la vista previa al inicio del video.
+  if (typeof state.ts === 'undefined' || (state.sid && state.sid !== activePlayerSid)) return;
 
   if (state.closed) {
     handleNativeClosed(state);

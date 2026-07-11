@@ -2447,9 +2447,10 @@ public class CMWmpHost : AxHost {
       $script:hasPlayed = $false
       Write-CMNativeState 0 0 $true $false ''
       # Silencio durante la transición: aunque se haga stop(), WMP puede dejar
-      # sonar un instante del medio anterior. Se silencia aquí y se reactiva
-      # el audio en el tick cuando el medio NUEVO ya está reproduciendo.
+      # sonar un instante del medio anterior. Mute + volumen 0 (doble seguro);
+      # se reactiva en el tick cuando el medio NUEVO ya está reproduciendo.
       try { $script:wmp.settings.mute = $true } catch {}
+      try { $script:wmp.settings.volume = 0 } catch {}
       $script:unmuteOnPlay = $true
       $script:unmuteSetMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
       try { $script:wmp.controls.stop() } catch {}
@@ -2491,9 +2492,9 @@ public class CMWmpHost : AxHost {
     })
 
     $timer = New-Object System.Windows.Forms.Timer
-    # 120 ms: los comandos (load/seek/pause) se recogen casi al instante sin
-    # costo apreciable de CPU.
-    $timer.Interval = 120
+    # 60 ms: los comandos (load/seek/pause) se recogen casi al instante; el
+    # trabajo por tick es mínimo y el estado a disco va aparte (350 ms).
+    $timer.Interval = 60
     $timer.Add_Tick({
       try {
         # ESC solo cierra cuando hay medio visible (no mata al host idle).
@@ -2532,6 +2533,7 @@ public class CMWmpHost : AxHost {
                 # Silenciar mientras WMP salta de posición: si no, se sigue
                 # oyendo el punto anterior una fracción de segundo.
                 try { $script:wmp.settings.mute = $true } catch {}
+                try { $script:wmp.settings.volume = 0 } catch {}
                 $script:unmuteOnPlay = $true
                 $script:unmuteSetMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
                 $script:wmp.controls.currentPosition = $seconds
@@ -2590,6 +2592,7 @@ public class CMWmpHost : AxHost {
             $nowUnmuteMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
             $muteElapsed = $nowUnmuteMs - $script:unmuteSetMs
             if ((($stateCode -eq 3) -and ($current -gt 0.05) -and ($muteElapsed -ge 250)) -or ($muteElapsed -ge 1500)) {
+              try { $script:wmp.settings.volume = 100 } catch {}
               try { $script:wmp.settings.mute = $false } catch {}
               $script:unmuteOnPlay = $false
             }
@@ -2981,16 +2984,24 @@ if (in_array($action, ['launch_player', 'launch_native_player', 'prewarm_native_
         $nativeFiles = getNativePlayerFiles($sid, $playerJobsPath);
         $state = [];
 
-        if (is_file($nativeFiles['state'])) {
-            $rawState = @file_get_contents($nativeFiles['state']);
-            if (is_string($rawState)) {
-                $rawState = preg_replace('/^\xEF\xBB\xBF/', '', $rawState);
-            }
-            $decodedState = is_string($rawState) ? json_decode($rawState, true) : null;
+        // El host reemplaza el archivo con Move-Item: hay una ventana mínima
+        // donde no existe o está a medias. Reintentar una vez evita devolver
+        // un estado vacío (que el cliente tendría que descartar).
+        for ($stateAttempt = 0; $stateAttempt < 2; $stateAttempt++) {
+            if (is_file($nativeFiles['state'])) {
+                $rawState = @file_get_contents($nativeFiles['state']);
+                if (is_string($rawState)) {
+                    $rawState = preg_replace('/^\xEF\xBB\xBF/', '', $rawState);
+                }
+                $decodedState = is_string($rawState) ? json_decode($rawState, true) : null;
 
-            if (is_array($decodedState)) {
-                $state = $decodedState;
+                if (is_array($decodedState) && isset($decodedState['ts'])) {
+                    $state = $decodedState;
+                    break;
+                }
             }
+
+            usleep(30000);
         }
 
         sendJson([
