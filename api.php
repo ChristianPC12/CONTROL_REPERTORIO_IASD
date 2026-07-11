@@ -2582,11 +2582,14 @@ public class CMWmpHost : AxHost {
             $script:hasPlayed = $true
           }
 
-          # Reactivar audio cuando el medio nuevo ya reproduce (o tras 1.5s
-          # como red de seguridad si quedó en pausa).
+          # Reactivar audio SOLO cuando el medio nuevo ya avanza de verdad
+          # (playing + posición > 0) y con un mínimo de 250 ms de silencio:
+          # WMP puede reportar "playing" mientras aún purga el audio anterior.
+          # Red de seguridad: 1.5 s (p. ej. quedó en pausa tras un seek).
           if ($script:unmuteOnPlay) {
             $nowUnmuteMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-            if ($stateCode -eq 3 -or ($nowUnmuteMs - $script:unmuteSetMs) -ge 1500) {
+            $muteElapsed = $nowUnmuteMs - $script:unmuteSetMs
+            if ((($stateCode -eq 3) -and ($current -gt 0.05) -and ($muteElapsed -ge 250)) -or ($muteElapsed -ge 1500)) {
               try { $script:wmp.settings.mute = $false } catch {}
               $script:unmuteOnPlay = $false
             }

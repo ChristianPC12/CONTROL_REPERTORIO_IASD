@@ -2580,6 +2580,12 @@ const controllerPreview = document.getElementById('controllerPreview');
 const controllerPreviewVideo = document.getElementById('controllerPreviewVideo');
 const controllerPreviewImg = document.getElementById('controllerPreviewImg');
 
+if (controllerPreviewVideo) {
+  controllerPreviewVideo.addEventListener('waiting', function () {
+    if (window.cmPreviewStats) window.cmPreviewStats.stalls++;
+  });
+}
+
 function clearControllerPreview() {
   if (!controllerPreview) return;
   controllerPreview.classList.add('hidden');
@@ -2630,6 +2636,9 @@ function updateControllerPreview(item, mode) {
   }
 }
 
+// Estadísticas del preview (diagnóstico): saltos duros y esperas de buffer.
+window.cmPreviewStats = { hardFixes: 0, stalls: 0 };
+
 function syncControllerPreview(current, paused, stateTs) {
   const v = controllerPreviewVideo;
   if (!v || v.classList.contains('hidden')) return;
@@ -2650,6 +2659,8 @@ function syncControllerPreview(current, paused, stateTs) {
     // Ventana de asentamiento: mientras el elemento buffea el archivo nuevo
     // reporta posiciones falsas; corregir ahí produce tirones visibles.
     v.dataset.settleUntil = String(performance.now() + 1800);
+    v.dataset.lastHardFix = '0';
+    v.playbackRate = 1;
     try { v.currentTime = target; } catch (e) {}
     v.classList.remove('is-loading');
     if (!paused) {
@@ -2659,22 +2670,49 @@ function syncControllerPreview(current, paused, stateTs) {
     return;
   }
 
-  // Mientras el usuario arrastra la barra (lock de seek) no se corrige la
-  // posición: la miniatura ya saltó con el eco y el reproductor real está
-  // alcanzándola; corregir aquí producía tirones de ida y vuelta.
-  const inSeekLock = performance.now() < nativeSeekLockUntil;
-  const settling = Number(v.dataset.settleUntil || 0) > performance.now();
-
-  // Corregir deriva: la miniatura sigue al reproductor real, no al revés.
-  if (!inSeekLock && !settling && Math.abs((v.currentTime || 0) - target) > 0.4) {
-    try { v.currentTime = target; } catch (e) {}
+  if (paused) {
+    if (!v.paused) v.pause();
+    v.playbackRate = 1;
+    return;
   }
 
-  if (paused && !v.paused) {
-    v.pause();
-  } else if (!paused && v.paused) {
+  if (v.paused) {
     const p = v.play();
     if (p && typeof p.catch === 'function') p.catch(function () {});
+  }
+
+  // No tocar la posición cuando: el usuario arrastra la barra (el eco ya
+  // saltó), el archivo nuevo está asentándose, o el elemento está buffeando
+  // o en medio de un seek. Reasignar currentTime en esos momentos reinicia
+  // la descarga y deja el preview pegado en bucle.
+  const inSeekLock = performance.now() < nativeSeekLockUntil;
+  const settling = Number(v.dataset.settleUntil || 0) > performance.now();
+  if (inSeekLock || settling || v.seeking || v.readyState < 3) {
+    v.playbackRate = 1;
+    return;
+  }
+
+  const delta = (v.currentTime || 0) - target; // + adelantado, − atrasado
+  const abs = Math.abs(delta);
+  const now = performance.now();
+
+  if (abs > 1.5) {
+    // Error grande: salto duro, pero máximo uno cada 2.5 s (si el elemento
+    // no logra buffear, insistir solo lo re-atasca).
+    if (now - Number(v.dataset.lastHardFix || 0) > 2500) {
+      v.dataset.lastHardFix = String(now);
+      window.cmPreviewStats.hardFixes++;
+      try { v.currentTime = target; } catch (e) {}
+    }
+    v.playbackRate = 1;
+  } else if (abs > 0.3) {
+    // Error pequeño: corregir con velocidad, no con saltos. Ganancia suave y
+    // tope ±10%: imperceptible (la posición de WMP trae ±0.3s de ruido, no
+    // vale la pena perseguirlo agresivamente).
+    const rate = 1 - Math.max(-0.1, Math.min(0.1, delta * 0.2));
+    v.playbackRate = rate;
+  } else {
+    v.playbackRate = 1;
   }
 }
 
@@ -3296,7 +3334,8 @@ window.cmDebugState = function () {
     alive: playerAlive,
     launching: playerLaunching,
     polling: Boolean(nativeStatePollTimer),
-    prewarm: prewarmNativeSid
+    prewarm: prewarmNativeSid,
+    stats: window.cmPreviewStats
   };
 };
 
@@ -3329,6 +3368,10 @@ function resetNativeSessionState() {
   if (playbackMode === 'external' || playbackMode === 'image') {
     playbackMode = '';
   }
+
+  // Teardown universal (ESC, fin natural, botón quitar, cambio de modo):
+  // dejar listo un host precalentado para que el próximo video sea inmediato.
+  schedulePrewarmNativePlayer(1200);
 }
 
 function handleNativeClosed(state) {
@@ -3336,9 +3379,6 @@ function handleNativeClosed(state) {
   const wasPlaylist = isPlayAllMode;
 
   resetNativeSessionState();
-
-  // Dejar listo un host precalentado para que el próximo video arranque ya.
-  schedulePrewarmNativePlayer(1500);
 
   if (wasEnded && wasPlaylist) {
     statusText.textContent = 'Video finalizado. Reproduciendo siguiente...';
@@ -4886,7 +4926,7 @@ resetConfiguredFoldersFromUrl()
 
 // Pre-calentar el reproductor nativo poco después del arranque (fuera del
 // camino crítico): el primer video se abre casi al instante.
-schedulePrewarmNativePlayer(2500);
+schedulePrewarmNativePlayer(1000);
 
 // ─── Temas (selector de paleta) ───────────────────────────────
 // Etapa 1: solo vista previa visual. "Aplicar" aún no persiste el tema;
