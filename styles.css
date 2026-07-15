@@ -728,41 +728,43 @@ select::-ms-expand {
   border: 1px solid rgba(var(--gold-rgb), 0.22);
 }
 
-/* Logos del tema flotando en las franjas negras laterales (mismo mecido y
-   parpadeo de llama que el logo del panel derecho; color según paleta). */
-.controller-preview::before,
-.controller-preview::after {
+/* Franjas laterales: ocupan el espacio sobrante a cada lado del video y
+   centran su logo automáticamente (sea cual sea el ancho de la franja). */
+.controller-preview .preview-side {
+  flex: 1 1 0;
+  align-self: stretch;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* Logo del tema (mismo mecido y parpadeo de llama que el del panel derecho;
+   color según paleta). Se encoge con la franja y desaparece si no hay sitio. */
+.controller-preview .preview-side::before {
   content: "";
-  position: absolute;
-  top: calc(50% - 26px);
-  width: 58px;
+  width: min(58px, 62%);
   aspect-ratio: 835 / 747;
   background-color: var(--gold);
   -webkit-mask: url("logo_iasd_mark.png") center / contain no-repeat;
   mask: url("logo_iasd_mark.png") center / contain no-repeat;
   opacity: 0.9;
-  z-index: 0;
-  pointer-events: none;
-}
-
-.controller-preview::before {
-  left: 18px;
   animation:
     brand-logo-float 9s ease-in-out infinite,
     brand-logo-flicker 3.4s ease-in-out infinite;
 }
 
-.controller-preview::after {
-  right: 18px;
-  /* Desfasado para que ambos no se muevan en espejo exacto. */
+/* Desfasado para que ambos no se muevan en espejo exacto. */
+.controller-preview .preview-side:last-child::before {
   animation:
     brand-logo-float 9s ease-in-out 1.7s infinite,
     brand-logo-flicker 3.4s ease-in-out 0.9s infinite;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .controller-preview::before,
-  .controller-preview::after {
+  .controller-preview .preview-side::before {
     animation: none;
   }
 }
@@ -781,7 +783,7 @@ select::-ms-expand {
   display: block;
   /* Fade suave al cambiar de medio (evita el corte brusco). */
   opacity: 1;
-  transition: opacity 0.28s ease;
+  transition: opacity 0.3s ease;
 }
 
 .controller-preview video.is-loading,

@@ -2646,14 +2646,14 @@ function updateControllerPreview(item, mode) {
     const switching = v && !v.classList.contains('hidden') && v.currentSrc;
 
     if (switching) {
-      // Cross-fade: fundir a negro el cuadro actual (0.28s), luego cambiar la
-      // fuente; el nuevo aparece fundiendo cuando sincroniza. Sin cortes
-      // bruscos ni distorsión.
+      // Cross-fade: fundir a negro el cuadro actual (0.3s COMPLETO, el swap
+      // espera a que el fundido termine), luego cambiar la fuente; el nuevo
+      // aparece fundiendo cuando sincroniza. Sin cortes a medias.
       v.classList.add('is-loading');
       setTimeout(function () {
         if (token !== previewSwapToken) return; // llegó otro cambio en medio
         setPreviewVideoSource(item);
-      }, 240);
+      }, 340);
     } else {
       clearControllerPreview();
       setPreviewVideoSource(item);
@@ -2671,6 +2671,10 @@ function syncControllerPreview(current, paused, stateTs) {
   const v = controllerPreviewVideo;
   if (!v || v.classList.contains('hidden')) return;
   if (v.readyState < 1) return;
+
+  // Fundiéndose a negro (cross-fade en curso, aún sin fuente nueva): no
+  // tocarlo — cualquier corrección haría visible un salto a media caída.
+  if (v.classList.contains('is-loading') && !v.dataset.pendingSync) return;
 
   // Posición objetivo con compensación de latencia: el estado se escribió en
   // stateTs (epoch ms del host, mismo reloj); lo que haya pasado desde
@@ -3322,8 +3326,8 @@ async function playerApi(action, sid, target, item) {
   return apiJson(buildPlayerActionUrl(action, sid, target, item));
 }
 
-async function nativePlayerCommand(type, extra) {
-  if (!activePlayerSid || activePlayerKind !== 'native') return null;
+async function nativePlayerCommandTo(sid, type, extra) {
+  if (!sid) return null;
 
   const form = new FormData();
   form.append('type', type);
@@ -3347,10 +3351,15 @@ async function nativePlayerCommand(type, extra) {
     }
   }
 
-  return apiJson('api.php?action=native_player_command&sid=' + encodeURIComponent(activePlayerSid), {
+  return apiJson('api.php?action=native_player_command&sid=' + encodeURIComponent(sid), {
     method: 'POST',
     body: form
   });
+}
+
+async function nativePlayerCommand(type, extra) {
+  if (!activePlayerSid || activePlayerKind !== 'native') return null;
+  return nativePlayerCommandTo(activePlayerSid, type, extra);
 }
 
 // Hook de diagnóstico (solo lectura) del estado interno del reproductor.
@@ -4037,7 +4046,9 @@ function schedulePrewarmNativePlayer(delayMs) {
 }
 
 async function prewarmNativePlayer() {
-  if (activePlayerSid || prewarmNativeSid) return;
+  // Se permite precalentar TAMBIÉN con un video activo: ese host de reserva
+  // es el que recibe el siguiente video (rotación de hosts).
+  if (prewarmNativeSid) return;
 
   const sid = makePlayerSid();
   const target = getSelectedMonitorTargetSync();
@@ -4053,18 +4064,26 @@ async function prewarmNativePlayer() {
 }
 
 // Devuelve el sid del host precalentado si está vivo y fresco; si no, ''.
+// Si el host aún está arrancando (cambios de video muy seguidos), se le da
+// hasta ~1.2s para madurar; si no lo logra, se le manda close para no dejar
+// procesos huérfanos.
 async function claimPrewarmedNativePlayer() {
   const sid = prewarmNativeSid;
   if (!sid) return '';
   prewarmNativeSid = '';
 
-  try {
-    const data = await apiJson('api.php?action=native_player_state&sid=' + encodeURIComponent(sid));
-    const s = data && data.state;
-    const fresh = s && !s.closed && Number(s.ts) && (Date.now() - Number(s.ts) < 4000);
-    if (fresh) return sid;
-  } catch (e) {}
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try {
+      const data = await apiJson('api.php?action=native_player_state&sid=' + encodeURIComponent(sid));
+      const s = data && data.state;
+      if (s && s.closed) break;
+      const fresh = s && !s.closed && Number(s.ts) && (Date.now() - Number(s.ts) < 4000);
+      if (fresh) return sid;
+    } catch (e) {}
+    await new Promise(function (r) { setTimeout(r, 300); });
+  }
 
+  nativePlayerCommandTo(sid, 'close').catch(function () {});
   return '';
 }
 
@@ -4131,6 +4150,8 @@ async function launchWindowsPlayer(item) {
       showController(item.title, isImage ? 'image' : 'video', item);
     }
     startNativeStatePolling();
+    // Reserva para el próximo cambio de video (rotación de hosts).
+    if (!isImage) schedulePrewarmNativePlayer(2000);
     statusText.textContent = (isImage ? 'Imagen en pantalla: ' : 'Reproduciendo en monitor externo: ') + item.title;
     return true;
   } catch (e) {
@@ -4169,6 +4190,25 @@ async function loadItemInNativePlayer(item) {
       }
     }
 
+    // ── Rotación de hosts (solo VIDEO): el video nuevo arranca en un host
+    // precalentado LIMPIO y el host actual se silencia ya y se cierra en
+    // segundo plano. Motivo: WMP retiene un resto del audio anterior en su
+    // pipeline al cambiar de URL dentro del mismo proceso; con un proceso
+    // nuevo por video, ese extracto es físicamente imposible. Bonus: la
+    // ventana nueva aparece encima de la vieja (sin hueco negro).
+    if (kind === 'video' && prewarmNativeSid) {
+      const oldSid = activePlayerSid;
+      const warmSid = await claimPrewarmedNativePlayer();
+      if (warmSid) {
+        nativePlayerCommandTo(oldSid, 'hush').catch(function () {});
+        stopNativeStatePolling();
+        activePlayerSid = warmSid;
+        setTimeout(function () {
+          nativePlayerCommandTo(oldSid, 'close').catch(function () {});
+        }, 900);
+      }
+    }
+
     playerAlive = true;
     playerLaunching = false;
     endedHandledSid = '';
@@ -4196,6 +4236,9 @@ async function loadItemInNativePlayer(item) {
     if (data && data.error) throw new Error(data.error);
 
     startNativeStatePolling();
+
+    // Dejar listo el host de reserva para el PRÓXIMO cambio de video.
+    if (kind === 'video') schedulePrewarmNativePlayer(1500);
 
     statusText.textContent = (kind === 'image' ? 'Imagen en pantalla: ' : 'Reproduciendo en monitor externo: ') + item.title;
     return true;

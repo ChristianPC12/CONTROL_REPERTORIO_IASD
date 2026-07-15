@@ -2486,7 +2486,9 @@ public class CMWmpHost : AxHost {
 
     $form.Add_KeyDown({
       param($sender, $args)
-      if ($args.KeyCode -eq [System.Windows.Forms.Keys]::Escape) {
+      # Solo con medio visible: si la ventana idle (reserva) hereda el foco
+      # justo cuando el usuario aún tiene ESC presionado, no debe cerrarse.
+      if ($script:hasMedia -and $args.KeyCode -eq [System.Windows.Forms.Keys]::Escape) {
         $form.Close()
       }
     })
@@ -2526,6 +2528,13 @@ public class CMWmpHost : AxHost {
                 $script:isPaused = $false
               } elseif ($commandType -eq 'pause') {
                 $script:wmp.controls.pause()
+                $script:isPaused = $true
+              } elseif ($commandType -eq 'hush') {
+                # Silencio total inmediato (rotación de hosts: este host va a
+                # cerrarse; que no pueda emitir ni un resto de audio).
+                try { $script:wmp.settings.mute = $true } catch {}
+                try { $script:wmp.settings.volume = 0 } catch {}
+                try { $script:wmp.controls.stop() } catch {}
                 $script:isPaused = $true
               } elseif ($commandType -eq 'seek') {
                 $seconds = [double]$command.time
@@ -3019,7 +3028,7 @@ if (in_array($action, ['launch_player', 'launch_native_player', 'prewarm_native_
         $type = trim((string) ($_POST['type'] ?? ''));
         $time = isset($_POST['time']) ? (float) $_POST['time'] : 0;
 
-        if (!in_array($type, ['play', 'pause', 'seek', 'load', 'close'], true)) {
+        if (!in_array($type, ['play', 'pause', 'seek', 'load', 'close', 'hush'], true)) {
             sendJson(['error' => 'Comando no válido para el player.']);
         }
 
