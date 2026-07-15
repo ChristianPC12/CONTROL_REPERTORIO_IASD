@@ -2748,6 +2748,22 @@ function syncControllerPreview(current, paused, stateTs) {
   }
 }
 
+// Animación de cambio de canción: los bloques del controlador se desprenden
+// y se rearman hacia arriba en cascada.
+let controllerSwapAnimTimer = null;
+function playControllerSwapAnimation() {
+  const card = controllerModal && controllerModal.querySelector('.controller-card');
+  if (!card) return;
+  card.classList.remove('is-swapping');
+  void card.offsetWidth; // reiniciar la animación si ya estaba corriendo
+  card.classList.add('is-swapping');
+  if (controllerSwapAnimTimer) clearTimeout(controllerSwapAnimTimer);
+  controllerSwapAnimTimer = setTimeout(function () {
+    card.classList.remove('is-swapping');
+    controllerSwapAnimTimer = null;
+  }, 1000);
+}
+
 function showController(title, mode, item) {
   controllerModal.classList.add('active');
   controllerModal.classList.toggle('image-mode', mode === 'image');
@@ -4223,8 +4239,12 @@ async function loadItemInNativePlayer(item) {
       progressBar.value = 0;
     }
 
+    const controllerWasVisible = controllerModal.classList.contains('active');
     if (shouldShowPresentationController(item)) {
       showController(item.title, kind === 'image' ? 'image' : 'video', item);
+      // Cambio de canción con el controlador ya en pantalla: animación de
+      // desprender y rearmar hacia arriba.
+      if (controllerWasVisible && kind === 'video') playControllerSwapAnimation();
     } else if (kind === 'image') {
       hideController();
     }

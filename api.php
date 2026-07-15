@@ -2574,6 +2574,18 @@ public class CMWmpHost : AxHost {
         }
 
         if ($script:wmp) {
+          # FLUIDEZ: toda la máquina de estado (llamadas COM a WMP + escritura
+          # a disco) corre como máximo cada 350 ms. El tick de 60 ms queda
+          # solo para ESC y comandos. Antes se interrogaba a WMP 16 veces por
+          # segundo desde el hilo de la UI y eso competía con el render del
+          # video. Excepciones que sí corren al tick: transición de audio
+          # pendiente (unmute) y cuenta regresiva de cierre por fin de video.
+          $nowStateMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+          if ($script:endedCloseDue -le 0 -and -not $script:unmuteOnPlay -and
+              ($nowStateMs - $script:lastStateWriteMs) -lt 350) {
+            return
+          }
+
           $duration = Get-CMWmpDuration
           $current = Get-CMWmpCurrent
 
@@ -2605,6 +2617,9 @@ public class CMWmpHost : AxHost {
               try { $script:wmp.settings.mute = $false } catch {}
               $script:unmuteOnPlay = $false
             }
+            # Mientras hay unmute pendiente el tick entra a 60 ms: no escribir
+            # estado en cada pasada, respetar el ritmo de 350 ms.
+            if (($nowStateMs - $script:lastStateWriteMs) -lt 350) { return }
           }
 
           $ended = $stateCode -eq 8 -or ($script:hasPlayed -and $stateCode -eq 1 -and $duration -gt 0)
@@ -2630,14 +2645,8 @@ public class CMWmpHost : AxHost {
               return
             }
           } else {
-            # Escribir estado cada ~350 ms (no en cada tick): el tick corre en
-            # el hilo de la UI y escribir a disco 8 veces/s producia
-            # micro-trabones en la reproduccion.
-            $nowStateMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-            if (($nowStateMs - $script:lastStateWriteMs) -ge 350) {
-              $script:lastStateWriteMs = $nowStateMs
-              Write-CMNativeState $current $duration $script:isPaused $false ''
-            }
+            $script:lastStateWriteMs = $nowStateMs
+            Write-CMNativeState $current $duration $script:isPaused $false ''
           }
         }
       } catch {

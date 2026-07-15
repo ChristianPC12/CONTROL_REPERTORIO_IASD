@@ -844,6 +844,56 @@ select::-ms-expand {
   gap: 14px;
 }
 
+/* Espaciador fantasma: compensa el botón de cerrar (✕) a la derecha para que
+   el botón de play quede en el CENTRO geométrico exacto de la tarjeta. */
+.controller-actions::before {
+  content: "";
+  width: 44px;
+  height: 44px;
+  flex: 0 0 auto;
+}
+
+/* Cambio de canción: los bloques del controlador se "desprenden" hacia abajo
+   y se rearman subiendo, en cascada (título → barra → botones). */
+@keyframes ctrl-reassemble {
+  0% {
+    transform: translateY(0);
+    opacity: 1;
+  }
+  32% {
+    transform: translateY(16px) scale(0.96);
+    opacity: 0;
+  }
+  55% {
+    transform: translateY(16px) scale(0.96);
+    opacity: 0;
+  }
+  100% {
+    transform: translateY(0) scale(1);
+    opacity: 1;
+  }
+}
+
+.controller-card.is-swapping .controller-top {
+  animation: ctrl-reassemble 0.72s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.controller-card.is-swapping .controller-progress {
+  animation: ctrl-reassemble 0.72s cubic-bezier(0.22, 1, 0.36, 1) 0.09s both;
+}
+
+.controller-card.is-swapping .controller-actions {
+  animation: ctrl-reassemble 0.72s cubic-bezier(0.22, 1, 0.36, 1) 0.18s both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .controller-card.is-swapping .controller-top,
+  .controller-card.is-swapping .controller-progress,
+  .controller-card.is-swapping .controller-actions {
+    animation: none;
+  }
+}
+
 .controller-actions button {
   width: 44px;
   height: 44px;
