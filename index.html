@@ -15,7 +15,7 @@
     /* Anti-parpadeo: aplica el tema guardado antes de pintar. */
     (function () {
       try {
-        var ids = ['santuario', 'cielo', 'oliva', 'vino', 'noche', 'trigo', 'indigo'];
+        var ids = ['santuario', 'clasico', 'cielo', 'oliva', 'vino', 'noche', 'trigo', 'indigo'];
         var t = localStorage.getItem('cm_theme');
         if (t && t !== 'santuario' && ids.indexOf(t) !== -1) {
           document.documentElement.setAttribute('data-theme', t);
@@ -23,7 +23,7 @@
       } catch (e) {}
     })();
   </script>
-  <link rel="stylesheet" href="styles.css?v=28">
+  <link rel="stylesheet" href="styles.css?v=29">
 </head>
 
 <body>
@@ -52,12 +52,13 @@
           </div>
 
           <div class="playback-options">
-            <label class="option-select">
-              <span>Pantalla</span>
-              <select id="monitorSelect">
-                <option value="">Detectando pantallas...</option>
-              </select>
-            </label>
+            <div class="option-select monitor-multi" id="monitorMulti">
+              <span id="monitorMultiTitle">Pantalla</span>
+              <button type="button" id="monitorMultiBtn" class="monitor-multi-btn" aria-haspopup="listbox" aria-expanded="false" aria-labelledby="monitorMultiTitle monitorMultiLabel">
+                <span id="monitorMultiLabel" class="monitor-multi-label">Detectando pantallas...</span>
+              </button>
+              <div id="monitorMultiPanel" class="monitor-multi-panel" role="listbox" aria-multiselectable="true" hidden></div>
+            </div>
             <label class="option-select">
               <span>Tipo de archivo</span>
               <select id="mediaTypeSelect">
@@ -489,7 +490,7 @@
     </div>
   </div>
 
-  <script defer src="app.js?v=55"></script>
+  <script defer src="app.js?v=56"></script>
 </body>
 
 </html>

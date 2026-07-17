@@ -24,7 +24,9 @@ const statusText = document.getElementById('statusText');
 const videoCount = document.getElementById('videoCount');
 const grid = document.getElementById('grid');
 const template = document.getElementById('videoCardTemplate');
-const monitorSelect = document.getElementById('monitorSelect');
+const monitorMultiBtn = document.getElementById('monitorMultiBtn');
+const monitorMultiLabel = document.getElementById('monitorMultiLabel');
+const monitorMultiPanel = document.getElementById('monitorMultiPanel');
 const mediaTypeSelect = document.getElementById('mediaTypeSelect');
 const playAllBtn = document.getElementById('playAllBtn');
 const addFolderBtn = document.getElementById('addFolderBtn');
@@ -391,6 +393,170 @@ async function fetchScreenTargets() {
 let monitorTargets = getFallbackTargets();
 let lastMonitorSignature = '';
 
+// ─── Selección múltiple de pantallas ─────────────────────────────────────────
+// Regla: Monitor 1 (principal) es EXCLUSIVO; el resto se combinan entre sí.
+// Se persiste como JSON (array); se sigue leyendo el formato viejo (string).
+let selectedMonitorValues = readStoredMonitorValues();
+
+function readStoredMonitorValues() {
+  try {
+    const raw = localStorage.getItem(MONITOR_PREF_KEY);
+    if (!raw) return ['main'];
+    if (raw.charAt(0) === '[') {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length) {
+        return parsed.map(String);
+      }
+      return ['main'];
+    }
+    return [raw];
+  } catch (e) {
+    return ['main'];
+  }
+}
+
+// Filtra contra las pantallas disponibles, aplica exclusividad de 'main' y
+// garantiza que nunca quede vacío. Devuelve en el orden de monitorTargets.
+function normalizeMonitorSelection(values) {
+  const available = monitorTargets.map(function (t) { return t.value; });
+  let vals = (values || []).map(String).filter(function (v) { return available.indexOf(v) !== -1; });
+
+  if (vals.indexOf('main') !== -1 && vals.length > 1) {
+    vals = ['main'];
+  }
+
+  if (!vals.length) {
+    vals = available.indexOf('main') !== -1 ? ['main'] : available.slice(0, 1);
+  }
+
+  return available.filter(function (v) { return vals.indexOf(v) !== -1; });
+}
+
+function getSelectedMonitorValues() {
+  return selectedMonitorValues.slice();
+}
+
+function persistMonitorSelection() {
+  try { localStorage.setItem(MONITOR_PREF_KEY, JSON.stringify(selectedMonitorValues)); } catch (e) {}
+}
+
+function applyMonitorSelection(values) {
+  const before = selectedMonitorValues.join('|');
+  selectedMonitorValues = normalizeMonitorSelection(values);
+  persistMonitorSelection();
+  renderMonitorMultiUI();
+
+  if (before !== selectedMonitorValues.join('|')) {
+    handleMonitorSelectionChanged();
+  }
+}
+
+function handleMonitorSelectionChanged() {
+  populatePlaylistDetailMonitors();
+
+  if (isPlayerOpen()) {
+    positionPlayerWindow('monitor_selection_change');
+  }
+
+  // Con reproducción nativa activa, las pantallas extra se ajustan en caliente
+  // (se agregan/cierran hosts esclavos del video o imagen actual).
+  syncSlaveNativePlayersToSelection();
+}
+
+function toggleMonitorValue(value) {
+  const current = getSelectedMonitorValues();
+  let next;
+
+  if (value === 'main') {
+    // La principal no se combina con nada.
+    next = ['main'];
+  } else if (current.indexOf(value) !== -1) {
+    next = current.filter(function (v) { return v !== value; });
+    if (!next.length) next = [value];
+  } else {
+    // Elegir una externa expulsa a la principal.
+    next = current.filter(function (v) { return v !== 'main'; }).concat(value);
+  }
+
+  applyMonitorSelection(next);
+}
+
+function shortMonitorName(target) {
+  const match = String(target && target.label || '').match(/^Monitor \d+/);
+  return match ? match[0] : String(target && target.label || '');
+}
+
+function monitorSummaryLabel() {
+  const targets = getSelectedMonitorTargetsSync();
+  if (!targets.length) return 'Detectando pantallas...';
+  if (targets.length === 1) return targets[0].label;
+  return targets.map(shortMonitorName).join(' + ');
+}
+
+function renderMonitorMultiUI() {
+  if (!monitorMultiPanel || !monitorMultiLabel) return;
+
+  monitorMultiLabel.textContent = monitorSummaryLabel();
+  monitorMultiPanel.innerHTML = '';
+
+  monitorTargets.forEach(function (target) {
+    const selected = selectedMonitorValues.indexOf(target.value) !== -1;
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'monitor-multi-row' + (selected ? ' is-selected' : '');
+    row.setAttribute('role', 'option');
+    row.setAttribute('aria-selected', selected ? 'true' : 'false');
+
+    const check = document.createElement('span');
+    check.className = 'monitor-multi-check';
+    check.setAttribute('aria-hidden', 'true');
+
+    const name = document.createElement('span');
+    name.className = 'monitor-multi-name';
+    name.textContent = target.label;
+
+    row.appendChild(check);
+    row.appendChild(name);
+    row.addEventListener('click', function () {
+      toggleMonitorValue(target.value);
+    });
+    monitorMultiPanel.appendChild(row);
+  });
+
+  if (monitorTargets.length > 1) {
+    const hint = document.createElement('div');
+    hint.className = 'monitor-multi-hint';
+    hint.textContent = 'Puede combinar varias pantallas externas. Monitor 1 va solo.';
+    monitorMultiPanel.appendChild(hint);
+  }
+}
+
+function setMonitorPanelOpen(open) {
+  if (!monitorMultiPanel || !monitorMultiBtn) return;
+  monitorMultiPanel.hidden = !open;
+  monitorMultiBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+
+if (monitorMultiBtn) {
+  monitorMultiBtn.addEventListener('click', function (event) {
+    event.stopPropagation();
+    setMonitorPanelOpen(monitorMultiPanel.hidden);
+  });
+
+  document.addEventListener('click', function (event) {
+    if (monitorMultiPanel.hidden) return;
+    if (!monitorMultiPanel.contains(event.target) && event.target !== monitorMultiBtn) {
+      setMonitorPanelOpen(false);
+    }
+  });
+
+  document.addEventListener('keydown', function (event) {
+    if (event.key === 'Escape' && !monitorMultiPanel.hidden) {
+      setMonitorPanelOpen(false);
+    }
+  });
+}
+
 function monitorTargetsSignature(targets) {
   return (targets || []).map(function (target) {
     return [
@@ -407,10 +573,10 @@ function monitorTargetsSignature(targets) {
 async function renderMonitorOptions(options) {
   const settings = options || {};
   const previousTargets = monitorTargets.slice();
-  const previousValue = monitorSelect.value || localStorage.getItem(MONITOR_PREF_KEY) || 'main';
+  const previousValues = getSelectedMonitorValues();
 
-  if (!settings.silent) {
-    monitorSelect.innerHTML = '<option value="main">Monitor 1 - Principal (detectando...)</option>';
+  if (!settings.silent && monitorMultiLabel) {
+    monitorMultiLabel.textContent = 'Detectando pantallas...';
   }
 
   const targets = await fetchScreenTargets();
@@ -420,37 +586,23 @@ async function renderMonitorOptions(options) {
 
   monitorTargets = targets;
 
-  if (!settings.silent || changed) {
-    monitorSelect.innerHTML = '';
+  const normalized = normalizeMonitorSelection(previousValues);
+  const lostSelection = previousValues.some(function (v) { return normalized.indexOf(v) === -1; });
 
-    for (const s of targets) {
-      const o = document.createElement('option');
-      o.value = s.value;
-      o.textContent = s.label;
-      monitorSelect.appendChild(o);
-    }
-  }
+  selectedMonitorValues = normalized;
+  persistMonitorSelection();
+  renderMonitorMultiUI();
+  populatePlaylistDetailMonitors();
 
-  const fallbackValue = targets.some(function (s) { return s.value === 'main'; })
-    ? 'main'
-    : (targets[0] ? targets[0].value : '');
-
-  if (previousValue && targets.some(function (s) { return s.value === previousValue; })) {
-    monitorSelect.value = previousValue;
-  } else {
-    monitorSelect.value = fallbackValue;
-    localStorage.setItem(MONITOR_PREF_KEY, fallbackValue);
-
-    if (settings.notice && hadSignature && changed && previousValue && previousValue !== fallbackValue) {
+  if (lostSelection) {
+    if (settings.notice && hadSignature && changed) {
       showAutoNotice('La pantalla seleccionada ya no está disponible.', 'warning');
     }
 
     if (isPlayerOpen()) {
       positionPlayerWindow('monitor_removed');
     }
-  }
-
-  if (settings.notice && hadSignature && changed && previousValue === monitorSelect.value) {
+  } else if (settings.notice && hadSignature && changed) {
     const previousCount = previousTargets.length;
     const nextCount = targets.length;
 
@@ -2243,9 +2395,8 @@ function returnToPlaylistDetail(delayMs) {
   playlistReturnContext = null;
 
   setTimeout(function () {
-    if (context.monitorValue && monitorSelect) {
-      monitorSelect.value = context.monitorValue;
-      localStorage.setItem(MONITOR_PREF_KEY, monitorSelect.value);
+    if (context.monitorValue) {
+      applyMonitorSelection([context.monitorValue]);
     }
 
     currentMediaType = 'video';
@@ -2264,7 +2415,7 @@ function returnToPlaylistDetail(delayMs) {
 function populatePlaylistDetailMonitors() {
   if (!playlistDetailMonitorSelect) return;
 
-  const selected = monitorSelect ? monitorSelect.value : '';
+  const selected = getSelectedMonitorTargetSync().value;
   const frag = document.createDocumentFragment();
 
   monitorTargets.forEach(function (target) {
@@ -2491,11 +2642,12 @@ function playSavedPlaylistItem(playlist, index) {
   const item = items[index];
   if (!item) return;
 
-  const monitorValue = playlistDetailMonitorSelect ? playlistDetailMonitorSelect.value : (monitorSelect ? monitorSelect.value : '');
+  const monitorValue = playlistDetailMonitorSelect
+    ? playlistDetailMonitorSelect.value
+    : getSelectedMonitorTargetSync().value;
 
-  if (playlistDetailMonitorSelect && monitorSelect) {
-    monitorSelect.value = monitorValue || monitorSelect.value;
-    localStorage.setItem(MONITOR_PREF_KEY, monitorSelect.value);
+  if (monitorValue) {
+    applyMonitorSelection([monitorValue]);
   }
 
   playlistReturnContext = {
@@ -3307,12 +3459,26 @@ async function requestWindowMgmtPermission() {
   }
 }
 
+// Pantalla PRINCIPAL de la selección (la primera en orden de monitorTargets):
+// es la que lleva el audio, la vista previa y la barra de progreso.
 function getSelectedMonitorTargetSync() {
   return (
-    monitorTargets.find(function (s) { return s.value === monitorSelect.value; }) ||
+    monitorTargets.find(function (s) { return selectedMonitorValues.indexOf(s.value) !== -1; }) ||
     monitorTargets[0] ||
     getFallbackTargets()[0]
   );
+}
+
+// Todas las pantallas seleccionadas (en orden de monitorTargets).
+function getSelectedMonitorTargetsSync() {
+  const targets = monitorTargets.filter(function (s) { return selectedMonitorValues.indexOf(s.value) !== -1; });
+  return targets.length ? targets : [getSelectedMonitorTargetSync()];
+}
+
+// Pantallas seleccionadas ADEMÁS de la principal (reciben hosts esclavos).
+function getExtraMonitorTargetsSync() {
+  const primary = getSelectedMonitorTargetSync();
+  return getSelectedMonitorTargetsSync().filter(function (t) { return t.value !== primary.value; });
 }
 
 function buildPlayerActionUrl(action, sid, target, item) {
@@ -3375,7 +3541,112 @@ async function nativePlayerCommandTo(sid, type, extra) {
 
 async function nativePlayerCommand(type, extra) {
   if (!activePlayerSid || activePlayerKind !== 'native') return null;
+
+  // Multi-pantalla: play/pausa/seek se replican a los hosts esclavos para
+  // que todas las pantallas se muevan a la vez.
+  if (slaveNativePlayers.length && (type === 'play' || type === 'pause' || type === 'seek')) {
+    slaveNativePlayers.forEach(function (slave) {
+      nativePlayerCommandTo(slave.sid, type, extra).catch(function () {});
+    });
+  }
+
   return nativePlayerCommandTo(activePlayerSid, type, extra);
+}
+
+// ─── Hosts esclavos (multi-pantalla) ─────────────────────────────────────────
+// Cuando hay más de una pantalla externa seleccionada, la principal la lleva
+// el host maestro (audio + estado) y cada pantalla extra recibe un host
+// esclavo SIEMPRE silenciado que muestra el mismo medio. Con una sola
+// pantalla esta lista queda vacía y no se ejecuta nada extra.
+let slaveNativePlayers = []; // [{ sid, value }]
+let slaveSyncTick = 0;
+let lastMasterVideoState = null; // { current, ts, paused }
+
+async function ensureSlaveNativePlayers(item) {
+  if (!item || item.source === 'browser' || activePlayerKind !== 'native' || !activePlayerSid) {
+    return;
+  }
+
+  const wanted = getExtraMonitorTargetsSync();
+  const wantedValues = wanted.map(function (t) { return t.value; });
+
+  // Pantallas deseleccionadas: cerrar su host.
+  slaveNativePlayers = slaveNativePlayers.filter(function (slave) {
+    if (wantedValues.indexOf(slave.value) !== -1) return true;
+    nativePlayerCommandTo(slave.sid, 'close').catch(function () {});
+    return false;
+  });
+
+  for (const target of wanted) {
+    const existing = slaveNativePlayers.find(function (s) { return s.value === target.value; });
+
+    if (existing) {
+      // Host vivo: solo cambiar el medio (rápido, sin proceso nuevo).
+      nativePlayerCommandTo(existing.sid, 'load', { item: item, target: target }).catch(function () {});
+      continue;
+    }
+
+    const sid = makePlayerSid();
+    slaveNativePlayers.push({ sid: sid, value: target.value });
+
+    apiJson(buildNativePlayerActionUrl(sid, target, item, true)).then(function (data) {
+      if (data && data.error) throw new Error(data.error);
+    }).catch(function (e) {
+      console.warn('[Multi-pantalla] No arrancó el host de ' + target.label + ':', e.message);
+      slaveNativePlayers = slaveNativePlayers.filter(function (s) { return s.sid !== sid; });
+    });
+  }
+}
+
+function closeSlaveNativePlayers() {
+  if (!slaveNativePlayers.length) return;
+
+  slaveNativePlayers.forEach(function (slave) {
+    nativePlayerCommandTo(slave.sid, 'close').catch(function () {});
+  });
+  slaveNativePlayers = [];
+}
+
+// Cambio de selección de pantallas con reproducción activa: ajustar esclavos
+// al medio actual sin tocar el host maestro.
+function syncSlaveNativePlayersToSelection() {
+  if (activePlayerKind !== 'native' || !activePlayerSid) return;
+  if (playbackMode !== 'external' && playbackMode !== 'image') return;
+
+  const item = library[currentIndex];
+  if (!item) return;
+
+  ensureSlaveNativePlayers(item).catch(function () {});
+}
+
+// Corrige la deriva natural entre hosts WMP: si un esclavo se aleja más de
+// ~0.45 s del maestro, se le manda un seek (inaudible: siempre está muteado).
+async function resyncSlaveNativePlayers() {
+  const master = lastMasterVideoState;
+  if (!master || master.paused || !slaveNativePlayers.length) return;
+
+  for (const slave of slaveNativePlayers.slice()) {
+    try {
+      const data = await apiJson('api.php?action=native_player_state&sid=' + encodeURIComponent(slave.sid));
+      const st = data && data.state;
+
+      if (!st || typeof st.ts === 'undefined') continue;
+
+      if (st.closed) {
+        slaveNativePlayers = slaveNativePlayers.filter(function (s) { return s.sid !== slave.sid; });
+        continue;
+      }
+
+      if (st.paused || st.ended || st.mediaType === 'image') continue;
+
+      const masterNow = master.current + Math.max(0, Date.now() - master.ts) / 1000;
+      const slaveNow = Number(st.current) + Math.max(0, Date.now() - Number(st.ts)) / 1000;
+
+      if (Math.abs(slaveNow - masterNow) > 0.45) {
+        nativePlayerCommandTo(slave.sid, 'seek', { time: Math.max(0, masterNow + 0.12) }).catch(function () {});
+      }
+    } catch (e) {}
+  }
 }
 
 // Hook de diagnóstico (solo lectura) del estado interno del reproductor.
@@ -3388,6 +3659,8 @@ window.cmDebugState = function () {
     launching: playerLaunching,
     polling: Boolean(nativeStatePollTimer),
     prewarm: prewarmNativeSid,
+    monitors: getSelectedMonitorValues(),
+    slaves: slaveNativePlayers.map(function (s) { return { sid: s.sid, value: s.value }; }),
     stats: window.cmPreviewStats
   };
 };
@@ -3417,6 +3690,8 @@ function resetNativeSessionState() {
   playerWindowRef = null;
   lastNativeNavId = '';
   stopNativeStatePolling();
+  closeSlaveNativePlayers();
+  lastMasterVideoState = null;
 
   if (playbackMode === 'external' || playbackMode === 'image') {
     playbackMode = '';
@@ -3481,6 +3756,12 @@ function applyNativeState(state) {
 
   const duration = Number(state.duration) || 0;
   const current = Number(state.current) || 0;
+  // Referencia del maestro para resincronizar hosts esclavos (multi-pantalla).
+  lastMasterVideoState = {
+    current: current,
+    ts: Number(state.ts) || Date.now(),
+    paused: Boolean(state.paused)
+  };
   const now = performance.now();
   const hasSeekPreview = nativeSeekPreviewValue !== null;
   const preview = Number(nativeSeekPreviewValue) || 0;
@@ -3531,6 +3812,12 @@ function startNativeStatePolling() {
       if (data && data.state) applyNativeState(data.state);
     } catch (e) {
       console.warn('[Player nativo] No se pudo leer estado:', e.message);
+    }
+
+    // Multi-pantalla: cada ~3 s se corrige la deriva de los esclavos.
+    slaveSyncTick++;
+    if (slaveNativePlayers.length && playbackMode === 'external' && slaveSyncTick % 10 === 0) {
+      resyncSlaveNativePlayers().catch(function () {});
     }
   }, 300);
 }
@@ -3601,7 +3888,7 @@ function buildPlayerWindowFeatures(target) {
   ].join(',');
 }
 
-function buildNativePlayerActionUrl(sid, target, item) {
+function buildNativePlayerActionUrl(sid, target, item, muted) {
   const params = new URLSearchParams();
   params.set('action', 'launch_native_player');
   params.set('sid', sid);
@@ -3612,6 +3899,7 @@ function buildNativePlayerActionUrl(sid, target, item) {
   params.set('top', String(Math.round(target.top)));
   params.set('width', String(Math.round(target.width)));
   params.set('height', String(Math.round(target.height)));
+  if (muted) params.set('muted', '1');
   return 'api.php?' + params.toString();
 }
 
@@ -3841,6 +4129,13 @@ function closePlaybackOnPageExit() {
       const commandForm = new FormData();
       commandForm.append('type', 'close');
       navigator.sendBeacon('api.php?action=native_player_command&sid=' + encodeURIComponent(sid), commandForm);
+
+      // Hosts esclavos de multi-pantalla: también deben morir al salir.
+      slaveNativePlayers.forEach(function (slave) {
+        const slaveForm = new FormData();
+        slaveForm.append('type', 'close');
+        navigator.sendBeacon('api.php?action=native_player_command&sid=' + encodeURIComponent(slave.sid), slaveForm);
+      });
     }
   } catch (e) {}
 
@@ -4116,9 +4411,11 @@ async function launchWindowsPlayer(item) {
     stopLocalAudio();
   }
 
-  // Ruta rápida: si hay un host de video precalentado, se adopta y el play es
-  // solo un 'load' (el host se revela ya posicionado en el monitor elegido).
-  if (!isImage && !activePlayerSid) {
+  // Ruta rápida: si hay un host precalentado, se adopta y el play es solo un
+  // 'load' (el host se revela ya posicionado en el monitor elegido). El host
+  // es unificado: sirve igual para video y para imagen, así la imagen en
+  // pantalla externa aparece tan rápido como un video.
+  if (!activePlayerSid) {
     const warmSid = await claimPrewarmedNativePlayer();
     if (warmSid) {
       activePlayerSid = warmSid;
@@ -4127,7 +4424,7 @@ async function launchWindowsPlayer(item) {
       lastNativeNavId = '';
       playerAlive = true;
       playerLaunching = false;
-      playbackMode = 'external';
+      playbackMode = isImage ? 'image' : 'external';
       pendingPlayerItem = null;
 
       const loaded = await loadItemInNativePlayer(item);
@@ -4166,8 +4463,10 @@ async function launchWindowsPlayer(item) {
       showController(item.title, isImage ? 'image' : 'video', item);
     }
     startNativeStatePolling();
-    // Reserva para el próximo cambio de video (rotación de hosts).
-    if (!isImage) schedulePrewarmNativePlayer(2000);
+    // Pantallas extra seleccionadas: mismo medio en sus hosts esclavos.
+    ensureSlaveNativePlayers(item).catch(function () {});
+    // Reserva para el próximo cambio (rotación de hosts / imagen inmediata).
+    schedulePrewarmNativePlayer(2000);
     statusText.textContent = (isImage ? 'Imagen en pantalla: ' : 'Reproduciendo en monitor externo: ') + item.title;
     return true;
   } catch (e) {
@@ -4189,11 +4488,13 @@ async function loadItemInNativePlayer(item) {
 
   const kind = item.kind || currentMediaType;
 
-  if ((kind === 'video' && playbackMode !== 'external') || (kind === 'image' && playbackMode !== 'image')) {
+  if (kind !== 'video' && kind !== 'image') {
     return false;
   }
 
-  if (kind !== 'video' && kind !== 'image') {
+  // El host es unificado: puede pasar de video a imagen y viceversa con un
+  // simple 'load'. Solo se exige que haya una sesión nativa activa.
+  if (playbackMode !== 'external' && playbackMode !== 'image') {
     return false;
   }
 
@@ -4230,6 +4531,7 @@ async function loadItemInNativePlayer(item) {
     endedHandledSid = '';
     nativeSeekPreviewValue = null;
     nativeSeekLockUntil = 0;
+    playbackMode = kind === 'image' ? 'image' : 'external';
     songTitle.textContent = item.title || item.name || 'Reproduciendo';
     songTitle.title = item.title || item.name || '';
 
@@ -4257,8 +4559,11 @@ async function loadItemInNativePlayer(item) {
 
     startNativeStatePolling();
 
-    // Dejar listo el host de reserva para el PRÓXIMO cambio de video.
-    if (kind === 'video') schedulePrewarmNativePlayer(1500);
+    // Pantallas extra seleccionadas: mismo medio en sus hosts esclavos.
+    ensureSlaveNativePlayers(item).catch(function () {});
+
+    // Dejar listo el host de reserva para el PRÓXIMO cambio (video o imagen).
+    schedulePrewarmNativePlayer(1500);
 
     statusText.textContent = (kind === 'image' ? 'Imagen en pantalla: ' : 'Reproduciendo en monitor externo: ') + item.title;
     return true;
@@ -4435,13 +4740,8 @@ setInterval(function () {
   });
 }, 30000);
 
-monitorSelect.addEventListener('change', function () {
-  localStorage.setItem(MONITOR_PREF_KEY, monitorSelect.value);
-  // Si el player está abierto, reposicionarlo al nuevo monitor inmediatamente
-  if (isPlayerOpen()) {
-    positionPlayerWindow('monitorSelect_change');
-  }
-});
+// (El selector de pantallas ahora es múltiple: los cambios se manejan en
+// toggleMonitorValue/applyMonitorSelection → handleMonitorSelectionChanged.)
 
 playPauseBtn.addEventListener('click', function () {
   if (playbackMode === 'image') return;
@@ -5034,6 +5334,12 @@ const APP_THEMES = [
     name: 'Santuario',
     desc: 'Crema, dorado y verde bosque (actual).',
     swatches: ['#f4efe6', '#ffffff', '#1f6f54', '#b07d24', '#221c14'],
+  },
+  {
+    id: 'clasico',
+    name: 'Clásico',
+    desc: 'Blanco limpio con grafito y azul marino.',
+    swatches: ['#f5f6f8', '#ffffff', '#2c4a7c', '#7c8494', '#1d232e'],
   },
   {
     id: 'cielo',

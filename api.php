@@ -2219,7 +2219,7 @@ function getNativePlayerFiles($sid, $jobsPath) {
     ];
 }
 
-function writeNativePlayerPowerShell($sid, $filePath, $mediaType, $left, $top, $width, $height, $jobsPath) {
+function writeNativePlayerPowerShell($sid, $filePath, $mediaType, $left, $top, $width, $height, $jobsPath, $muted = false) {
     if (!is_dir($jobsPath)) {
         mkdir($jobsPath, 0777, true);
     }
@@ -2242,6 +2242,9 @@ function writeNativePlayerPowerShell($sid, $filePath, $mediaType, $left, $top, $
     $ps .= "\$commandFile = " . psQuote($files['command']) . "\r\n";
     // Modo pre-calentado: sin archivo => host listo pero oculto, espera 'load'.
     $ps .= "\$idleStart = " . ($filePath === '' ? '$true' : '$false') . "\r\n";
+    // Host esclavo (multi-pantalla): reproduce siempre en silencio total.
+    // El audio sale únicamente del host maestro.
+    $ps .= "\$alwaysMuted = " . ($muted ? '$true' : '$false') . "\r\n";
 
     // Rutas de DLLs cacheadas para los componentes C#. Compilar (csc) en cada
     // arranque de PowerShell es lento en discos lentos/gama baja; al cachear el
@@ -2347,7 +2350,11 @@ public class CMNativeWinApi {
   $script:rightWasDown = $false
   Write-CMNativeState 0 0 $true $false ''
 
-  if ($mediaType -eq 'video') {
+  # Host unificado (video + imagen): un solo proceso WinForms con WMP para
+  # video y un PictureBox para imágenes. Así el host precalentado sirve para
+  # ambos tipos y las imágenes en pantalla externa salen tan rápido como los
+  # videos (antes cada imagen arrancaba un proceso WPF frío de varios segundos).
+  if ($true) {
     Add-Type -AssemblyName System.Windows.Forms
     Add-Type -AssemblyName System.Drawing
     $cmSrcWmpHost = @'
@@ -2391,7 +2398,79 @@ public class CMWmpHost : AxHost {
     $wmpHost.BackColor = [System.Drawing.Color]::Black
     $form.Controls.Add($wmpHost)
 
+    # Visor de imágenes del host unificado: mismo proceso, cambio instantáneo.
+    $pictureBox = New-Object System.Windows.Forms.PictureBox
+    $pictureBox.Dock = [System.Windows.Forms.DockStyle]::Fill
+    $pictureBox.SizeMode = [System.Windows.Forms.PictureBoxSizeMode]::Zoom
+    $pictureBox.BackColor = [System.Drawing.Color]::Black
+    $pictureBox.Visible = $false
+    $form.Controls.Add($pictureBox)
+
     $script:wmp = $null
+    $script:mediaType = $mediaType
+
+    # Decodifica una imagen sin bloquear el archivo. GDI+ cubre jpg/png/bmp/
+    # gif/tiff; para webp/heic/avif se cae a WIC (WPF) y se reencapsula.
+    function New-CMDrawingImage([string]$path) {
+      try {
+        $bytes = [System.IO.File]::ReadAllBytes($path)
+        $ms = New-Object System.IO.MemoryStream(,$bytes)
+        return [System.Drawing.Image]::FromStream($ms)
+      } catch {
+        Add-Type -AssemblyName PresentationCore
+        Add-Type -AssemblyName WindowsBase
+        $bmp = New-Object System.Windows.Media.Imaging.BitmapImage
+        $bmp.BeginInit()
+        $bmp.CacheOption = [System.Windows.Media.Imaging.BitmapCacheOption]::OnLoad
+        $bmp.UriSource = [Uri]::new($path, [System.UriKind]::Absolute)
+        $bmp.EndInit()
+        $encoder = New-Object System.Windows.Media.Imaging.PngBitmapEncoder
+        $encoder.Frames.Add([System.Windows.Media.Imaging.BitmapFrame]::Create($bmp))
+        $out = New-Object System.IO.MemoryStream
+        $encoder.Save($out)
+        $out.Position = 0
+        return [System.Drawing.Image]::FromStream($out)
+      }
+    }
+
+    function Show-CMImageFile([string]$path) {
+      $script:isPaused = $true
+      $script:endedCloseDue = 0
+      $script:hasPlayed = $false
+      # Si venía un video, silencio y stop antes de tapar con la imagen.
+      if ($script:wmp) {
+        try { $script:wmp.settings.mute = $true } catch {}
+        try { $script:wmp.settings.volume = 0 } catch {}
+        try { $script:wmp.controls.stop() } catch {}
+      }
+      $script:unmuteOnPlay = $false
+      $previousImage = $pictureBox.Image
+      $pictureBox.Image = New-CMDrawingImage $path
+      if ($previousImage) { try { $previousImage.Dispose() } catch {} }
+      $wmpHost.Visible = $false
+      $pictureBox.Visible = $true
+      $script:mediaType = 'image'
+      # Imagen nueva en pantalla: descartar navegación pendiente.
+      $script:nav = ''
+      $script:navId = ''
+      Write-CMNativeState 0 0 $true $false ''
+      Write-CMNativeLog ('Imagen: ' + $path)
+    }
+
+    # Navegación de imágenes con flechas (mismo contrato nav/navId que lee app.js).
+    function Request-CMImageNav([string]$direction) {
+      try {
+        if ($script:mediaType -ne 'image' -or -not $script:hasMedia) { return }
+        if ($direction -ne 'next' -and $direction -ne 'prev') { return }
+        $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+        if (($nowMs - [int64]$script:lastNavAt) -lt 280) { return }
+        $script:lastNavAt = $nowMs
+        $script:nav = $direction
+        $script:navId = [string]$nowMs + '_' + $direction
+        Write-CMNativeState 0 0 $true $false ''
+        Write-CMNativeLog ('NavImage: ' + $direction)
+      } catch {}
+    }
 
     function Show-CMWmpWindow([string]$reason) {
       try {
@@ -2445,6 +2524,15 @@ public class CMWmpHost : AxHost {
       $script:isPaused = $true
       $script:endedCloseDue = 0
       $script:hasPlayed = $false
+      # Volver a modo video si el host estaba mostrando una imagen.
+      if ($pictureBox.Visible) {
+        $pictureBox.Visible = $false
+        $wmpHost.Visible = $true
+      }
+      $script:mediaType = 'video'
+      # Medio nuevo: la navegación pendiente de imágenes deja de tener sentido.
+      $script:nav = ''
+      $script:navId = ''
       Write-CMNativeState 0 0 $true $false ''
       # Silencio durante la transición: aunque se haga stop(), WMP puede dejar
       # sonar un instante del medio anterior. Mute + volumen 0 (doble seguro);
@@ -2468,12 +2556,22 @@ public class CMWmpHost : AxHost {
         $script:wmp.enableContextMenu = $false
         $script:wmp.stretchToFit = $true
         $script:wmp.settings.autoStart = $true
-        $script:wmp.settings.volume = 100
-        $script:wmp.settings.mute = $false
+        if ($alwaysMuted) {
+          $script:wmp.settings.volume = 0
+          $script:wmp.settings.mute = $true
+        } else {
+          $script:wmp.settings.volume = 100
+          $script:wmp.settings.mute = $false
+        }
         if (-not $idleStart) {
           $script:hasMedia = $true
-          Start-CMWmpFile $filePath
-          Show-CMWmpWindow 'shown-video'
+          if ($script:mediaType -eq 'image') {
+            Show-CMImageFile $filePath
+            Show-CMWmpWindow 'shown-image'
+          } else {
+            Start-CMWmpFile $filePath
+            Show-CMWmpWindow 'shown-video'
+          }
         } else {
           Write-CMNativeLog 'Host WMP precalentado (idle): listo, esperando load'
         }
@@ -2490,6 +2588,10 @@ public class CMWmpHost : AxHost {
       # justo cuando el usuario aún tiene ESC presionado, no debe cerrarse.
       if ($script:hasMedia -and $args.KeyCode -eq [System.Windows.Forms.Keys]::Escape) {
         $form.Close()
+      } elseif ($args.KeyCode -eq [System.Windows.Forms.Keys]::Left) {
+        Request-CMImageNav 'prev'
+      } elseif ($args.KeyCode -eq [System.Windows.Forms.Keys]::Right) {
+        Request-CMImageNav 'next'
       }
     })
 
@@ -2512,6 +2614,16 @@ public class CMWmpHost : AxHost {
           Write-CMNativeLog 'Idle sin uso: cerrando host precalentado'
           $form.Close()
           return
+        }
+
+        # Flechas globales para pasar de imagen (igual que el visor WPF anterior).
+        if ($script:hasMedia -and $script:mediaType -eq 'image') {
+          $leftDown = (([CMNativeWinApi]::GetAsyncKeyState(0x25) -band 0x8000) -ne 0)
+          $rightDown = (([CMNativeWinApi]::GetAsyncKeyState(0x27) -band 0x8000) -ne 0)
+          if ($leftDown -and -not $script:leftWasDown) { Request-CMImageNav 'prev' }
+          if ($rightDown -and -not $script:rightWasDown) { Request-CMImageNav 'next' }
+          $script:leftWasDown = $leftDown
+          $script:rightWasDown = $rightDown
         }
 
         if ($script:wmp -and (Test-Path -LiteralPath $commandFile)) {
@@ -2549,7 +2661,8 @@ public class CMWmpHost : AxHost {
               } elseif ($commandType -eq 'load') {
                 $nextPath = [string]$command.filePath
                 $nextType = [string]$command.mediaType
-                if ($nextType -eq 'video' -and -not [string]::IsNullOrWhiteSpace($nextPath) -and (Test-Path -LiteralPath $nextPath)) {
+                if (($nextType -eq 'video' -or $nextType -eq 'image') -and
+                    -not [string]::IsNullOrWhiteSpace($nextPath) -and (Test-Path -LiteralPath $nextPath)) {
                   # Coordenadas frescas del monitor elegido (si vienen): el host
                   # se reposiciona en cada load, incluido el primer load tras
                   # el pre-calentado.
@@ -2562,8 +2675,13 @@ public class CMWmpHost : AxHost {
                   $script:hasMedia = $true
                   $script:idleDeadlineMs = 0
                   try { $form.Opacity = 1 } catch {}
-                  Start-CMWmpFile $nextPath
-                  Show-CMWmpWindow 'load-video'
+                  if ($nextType -eq 'image') {
+                    Show-CMImageFile $nextPath
+                    Show-CMWmpWindow 'load-image'
+                  } else {
+                    Start-CMWmpFile $nextPath
+                    Show-CMWmpWindow 'load-video'
+                  }
                 }
               } elseif ($commandType -eq 'close') {
                 $form.Close()
@@ -2581,6 +2699,17 @@ public class CMWmpHost : AxHost {
           # video. Excepciones que sí corren al tick: transición de audio
           # pendiente (unmute) y cuenta regresiva de cierre por fin de video.
           $nowStateMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+
+          # Modo imagen: sin COM a WMP; solo latido de estado cada 350 ms para
+          # que el controlador vea al host vivo (ts) y lea nav/navId.
+          if ($script:mediaType -eq 'image') {
+            if (($nowStateMs - $script:lastStateWriteMs) -ge 350) {
+              $script:lastStateWriteMs = $nowStateMs
+              Write-CMNativeState 0 0 $true $false ''
+            }
+            return
+          }
+
           if ($script:endedCloseDue -le 0 -and -not $script:unmuteOnPlay -and
               ($nowStateMs - $script:lastStateWriteMs) -lt 350) {
             return
@@ -2612,7 +2741,10 @@ public class CMWmpHost : AxHost {
           if ($script:unmuteOnPlay) {
             $nowUnmuteMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
             $muteElapsed = $nowUnmuteMs - $script:unmuteSetMs
-            if ((($stateCode -eq 3) -and ($current -gt 0.05) -and ($muteElapsed -ge 250)) -or ($muteElapsed -ge 1500)) {
+            if ($alwaysMuted) {
+              # Host esclavo (multi-pantalla): jamás reactivar el audio.
+              $script:unmuteOnPlay = $false
+            } elseif ((($stateCode -eq 3) -and ($current -gt 0.05) -and ($muteElapsed -ge 250)) -or ($muteElapsed -ge 1500)) {
               try { $script:wmp.settings.volume = 100 } catch {}
               try { $script:wmp.settings.mute = $false } catch {}
               $script:unmuteOnPlay = $false
@@ -2632,6 +2764,16 @@ public class CMWmpHost : AxHost {
 
           if ($ended) {
             if ($duration -gt 0) { $current = $duration }
+
+            if ($alwaysMuted) {
+              # Esclavo (multi-pantalla): al terminar NO se autocierra; espera
+              # el siguiente 'load' o el 'close' del maestro. Así en playlists
+              # no se rearranca un proceso por canción en cada pantalla extra.
+              $script:lastStateWriteMs = $nowStateMs
+              Write-CMNativeState $current $duration $true $true ''
+              return
+            }
+
             if ($script:endedCloseDue -le 0) {
               $script:endedCloseDue = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() + 2200
               Write-CMNativeLog 'WMP Ended'
@@ -2675,282 +2817,6 @@ public class CMWmpHost : AxHost {
     exit 0
   }
 
-  Add-Type -AssemblyName PresentationCore
-  Add-Type -AssemblyName PresentationFramework
-  Add-Type -AssemblyName WindowsBase
-
-  $media = $null
-  $image = $null
-
-  $window = New-Object System.Windows.Window
-  $window.Title = 'CONTROL_MUSICA_NATIVE_' + $sid
-  $window.WindowStyle = [System.Windows.WindowStyle]::None
-  $window.ResizeMode = [System.Windows.ResizeMode]::NoResize
-  $window.WindowStartupLocation = [System.Windows.WindowStartupLocation]::Manual
-  $window.Left = $left
-  $window.Top = $top
-  $window.Width = $width
-  $window.Height = $height
-  $window.Topmost = $true
-  $window.ShowInTaskbar = $false
-  $window.Background = [System.Windows.Media.Brushes]::Black
-  $window.Cursor = [System.Windows.Input.Cursors]::None
-  $window.Focusable = $true
-  $window.ShowActivated = $true
-
-  function Show-CMNativeWindow([string]$reason) {
-    try {
-      $window.Left = $left
-      $window.Top = $top
-      $window.Width = $width
-      $window.Height = $height
-
-      $helper = New-Object System.Windows.Interop.WindowInteropHelper($window)
-      $hwnd = $helper.Handle
-      if ($hwnd -ne [IntPtr]::Zero) {
-        $scaleX = 1.0
-        $scaleY = 1.0
-        $source = [System.Windows.PresentationSource]::FromVisual($window)
-        if ($source -and $source.CompositionTarget) {
-          $scaleX = [double]$source.CompositionTarget.TransformToDevice.M11
-          $scaleY = [double]$source.CompositionTarget.TransformToDevice.M22
-        }
-
-        $pixelLeft = [int][math]::Round($left * $scaleX)
-        $pixelTop = [int][math]::Round($top * $scaleY)
-        $pixelWidth = [int][math]::Round($width * $scaleX)
-        $pixelHeight = [int][math]::Round($height * $scaleY)
-        $HWND_TOPMOST = [IntPtr]::new(-1)
-        $SWP_SHOWWINDOW = 0x0040
-        $SWP_FRAMECHANGED = 0x0020
-        $flags = [uint32]($SWP_SHOWWINDOW -bor $SWP_FRAMECHANGED)
-        [void][CMNativeWinApi]::ShowWindow($hwnd, 5)
-        [void][CMNativeWinApi]::SetWindowPos($hwnd, $HWND_TOPMOST, $pixelLeft, $pixelTop, $pixelWidth, $pixelHeight, $flags)
-        [void][CMNativeWinApi]::SetForegroundWindow($hwnd)
-        Write-CMNativeLog ('Window visible [' + $reason + ']: hwnd=' + $hwnd + ' dip=' + $left + ',' + $top + ',' + $width + 'x' + $height + ' px=' + $pixelLeft + ',' + $pixelTop + ',' + $pixelWidth + 'x' + $pixelHeight + ' scale=' + $scaleX + 'x' + $scaleY)
-      } else {
-        Write-CMNativeLog ('Window handle vacio [' + $reason + ']')
-      }
-    } catch {
-      Write-CMNativeLog ('ERROR ShowWindow [' + $reason + ']: ' + $_.Exception.Message)
-    }
-  }
-
-  $window.Add_SourceInitialized({
-    Show-CMNativeWindow 'source'
-  })
-
-  function New-CMNativeBitmap([string]$path) {
-    $bitmap = New-Object System.Windows.Media.Imaging.BitmapImage
-    $bitmap.BeginInit()
-    $bitmap.CacheOption = [System.Windows.Media.Imaging.BitmapCacheOption]::OnLoad
-    $bitmap.UriSource = [Uri]::new($path, [System.UriKind]::Absolute)
-    $bitmap.EndInit()
-    $bitmap.Freeze()
-    return $bitmap
-  }
-
-  function Request-CMNativeImageNav([string]$direction) {
-    try {
-      if ($mediaType -ne 'image') { return }
-      if ($direction -ne 'next' -and $direction -ne 'prev') { return }
-
-      $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-      if (($nowMs - [int64]$script:lastNavAt) -lt 280) { return }
-
-      $script:lastNavAt = $nowMs
-      $script:nav = $direction
-      $script:navId = [string]$nowMs + '_' + $direction
-      Write-CMNativeState 0 0 $true $false ''
-      Write-CMNativeLog ('NavImage: ' + $direction)
-    } catch {}
-  }
-
-  if ($mediaType -eq 'image') {
-    $image = New-Object System.Windows.Controls.Image
-    $image.Source = New-CMNativeBitmap $filePath
-    $image.Stretch = [System.Windows.Media.Stretch]::Uniform
-    $image.HorizontalAlignment = [System.Windows.HorizontalAlignment]::Center
-    $image.VerticalAlignment = [System.Windows.VerticalAlignment]::Center
-    [System.Windows.Media.RenderOptions]::SetBitmapScalingMode($image, [System.Windows.Media.BitmapScalingMode]::HighQuality)
-    $window.Content = $image
-
-    $window.Add_Loaded({
-      Show-CMNativeWindow 'loaded-image'
-      $window.Activate()
-      $window.Focus()
-      $window.Topmost = $false
-      $window.Topmost = $true
-    })
-  } else {
-    $media = New-Object System.Windows.Controls.MediaElement
-    $media.LoadedBehavior = [System.Windows.Controls.MediaState]::Manual
-    $media.UnloadedBehavior = [System.Windows.Controls.MediaState]::Manual
-    $media.ScrubbingEnabled = $true
-    $media.Stretch = [System.Windows.Media.Stretch]::Uniform
-    $media.Volume = 0
-    $media.Source = [Uri]::new($filePath, [System.UriKind]::Absolute)
-    $window.Content = $media
-
-    $window.Add_Loaded({
-      Show-CMNativeWindow 'loaded-video'
-      $window.Activate()
-      $window.Focus()
-      $media.Volume = 0
-      $media.Play()
-      $script:isPaused = $true
-      Write-CMNativeLog 'Loaded: precarga silenciosa solicitada'
-    })
-
-    $media.Add_MediaOpened({
-      Show-CMNativeWindow 'opened-video'
-      $window.Activate()
-      $duration = Get-CMNaturalDurationSeconds $media
-      $media.Pause()
-      $media.Position = [TimeSpan]::Zero
-      Write-CMNativeState 0 $duration $true $false ''
-      Write-CMNativeLog ('MediaOpened: duration=' + $duration)
-      $media.Dispatcher.BeginInvoke([Action]{
-        try {
-          $media.Volume = 1
-          $media.Play()
-          $script:isPaused = $false
-          Write-CMNativeState ([double]$media.Position.TotalSeconds) (Get-CMNaturalDurationSeconds $media) $false $false ''
-          Write-CMNativeLog 'Play iniciado despues de MediaOpened'
-        } catch {
-          Write-CMNativeLog ('ERROR Play diferido: ' + $_.Exception.Message)
-        }
-      }, [System.Windows.Threading.DispatcherPriority]::ApplicationIdle) | Out-Null
-    })
-
-    $media.Add_MediaEnded({
-      Write-CMNativeState (Get-CMNaturalDurationSeconds $media) (Get-CMNaturalDurationSeconds $media) $true $true ''
-      Write-CMNativeLog 'MediaEnded'
-      $window.Close()
-    })
-
-    $media.Add_MediaFailed({
-      param($sender, $args)
-      Write-CMNativeLog ('ERROR MediaFailed: ' + $args.ErrorException.Message)
-      Write-CMNativeState 0 0 $true $false $args.ErrorException.Message
-      $window.Close()
-    })
-  }
-
-  $timer = New-Object System.Windows.Threading.DispatcherTimer
-  $timer.Interval = [TimeSpan]::FromMilliseconds(250)
-  $timer.Add_Tick({
-    try {
-      if (([CMNativeWinApi]::GetAsyncKeyState(0x1B) -band 0x8000) -ne 0) {
-        $window.Close()
-        return
-      }
-
-      if ($mediaType -eq 'image') {
-        $leftDown = (([CMNativeWinApi]::GetAsyncKeyState(0x25) -band 0x8000) -ne 0)
-        $rightDown = (([CMNativeWinApi]::GetAsyncKeyState(0x27) -band 0x8000) -ne 0)
-
-        if ($leftDown -and -not $script:leftWasDown) {
-          Request-CMNativeImageNav 'prev'
-        }
-
-        if ($rightDown -and -not $script:rightWasDown) {
-          Request-CMNativeImageNav 'next'
-        }
-
-        $script:leftWasDown = $leftDown
-        $script:rightWasDown = $rightDown
-      }
-
-      if ($mediaType -eq 'video' -or $mediaType -eq 'image') {
-        if (Test-Path -LiteralPath $commandFile) {
-          $rawCommand = Get-Content -LiteralPath $commandFile -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
-          if (-not [string]::IsNullOrWhiteSpace($rawCommand)) {
-            $command = $rawCommand | ConvertFrom-Json -ErrorAction SilentlyContinue
-            if ($command -and $command.id -and $command.id -ne $script:lastCommandId) {
-              $script:lastCommandId = [string]$command.id
-              $commandType = [string]$command.type
-
-              if ($commandType -eq 'play' -and $media) {
-                $media.Play()
-                $script:isPaused = $false
-              } elseif ($commandType -eq 'pause' -and $media) {
-                $media.Pause()
-                $script:isPaused = $true
-              } elseif ($commandType -eq 'seek' -and $media) {
-                $seconds = [double]$command.time
-                if ($seconds -lt 0) { $seconds = 0 }
-                $media.Position = [TimeSpan]::FromSeconds($seconds)
-              } elseif ($commandType -eq 'load') {
-                $nextPath = [string]$command.filePath
-                $nextType = [string]$command.mediaType
-                if ($nextType -eq 'video' -and $media -and -not [string]::IsNullOrWhiteSpace($nextPath) -and (Test-Path -LiteralPath $nextPath)) {
-                  $media.Stop()
-                  $script:isPaused = $true
-                  Write-CMNativeState 0 0 $true $false ''
-                  $media.Volume = 0
-                  $media.Source = [Uri]::new($nextPath, [System.UriKind]::Absolute)
-                  $media.Play()
-                  Show-CMNativeWindow 'load-video'
-                  Write-CMNativeLog ('Load: ' + $nextPath)
-                } elseif ($nextType -eq 'image' -and $image -and -not [string]::IsNullOrWhiteSpace($nextPath) -and (Test-Path -LiteralPath $nextPath)) {
-                  $image.Source = New-CMNativeBitmap $nextPath
-                  $mediaType = 'image'
-                  Write-CMNativeState 0 0 $true $false ''
-                  Show-CMNativeWindow 'load-image'
-                  Write-CMNativeLog ('LoadImage: ' + $nextPath)
-                }
-              } elseif ($commandType -eq 'close') {
-                $window.Close()
-                return
-              }
-            }
-          }
-        }
-
-        if ($mediaType -eq 'video' -and $media) {
-          $duration = Get-CMNaturalDurationSeconds $media
-          $current = [double]$media.Position.TotalSeconds
-          Write-CMNativeState $current $duration $script:isPaused $false ''
-        }
-      }
-    } catch {
-      Write-CMNativeLog ('ERROR Tick: ' + $_.Exception.Message)
-    }
-  })
-  $timer.Start()
-
-  $window.Add_KeyDown({
-    param($sender, $args)
-    if ($args.Key -eq [System.Windows.Input.Key]::Escape) {
-      $window.Close()
-    } elseif ($args.Key -eq [System.Windows.Input.Key]::Left) {
-      Request-CMNativeImageNav 'prev'
-    } elseif ($args.Key -eq [System.Windows.Input.Key]::Right) {
-      Request-CMNativeImageNav 'next'
-    }
-  })
-
-  $window.Add_PreviewKeyDown({
-    param($sender, $args)
-    if ($args.Key -eq [System.Windows.Input.Key]::Escape) {
-      $window.Close()
-    } elseif ($args.Key -eq [System.Windows.Input.Key]::Left) {
-      Request-CMNativeImageNav 'prev'
-    } elseif ($args.Key -eq [System.Windows.Input.Key]::Right) {
-      Request-CMNativeImageNav 'next'
-    }
-  })
-
-  $window.Add_Closed({
-    try { if ($timer) { $timer.Stop() } } catch {}
-    try { if ($media) { $media.Stop() } } catch {}
-    Write-CMNativeState 0 0 $true $false '' $true
-    Write-CMNativeLog 'Cerrado'
-  })
-
-  $app = New-Object System.Windows.Application
-  [void]$app.Run($window)
 } catch {
   Write-CMNativeLog ('ERROR: ' + $_.Exception.Message)
   exit 1
@@ -2964,8 +2830,8 @@ PS;
     return $files['ps1'];
 }
 
-function runNativePlayerPowerShell($sid, $filePath, $mediaType, $left, $top, $width, $height, $jobsPath) {
-    $ps1 = writeNativePlayerPowerShell($sid, $filePath, $mediaType, $left, $top, $width, $height, $jobsPath);
+function runNativePlayerPowerShell($sid, $filePath, $mediaType, $left, $top, $width, $height, $jobsPath, $muted = false) {
+    $ps1 = writeNativePlayerPowerShell($sid, $filePath, $mediaType, $left, $top, $width, $height, $jobsPath, $muted);
 
     if ($ps1 === '') {
         return false;
@@ -3127,7 +2993,11 @@ if (in_array($action, ['launch_player', 'launch_native_player', 'prewarm_native_
             sendJson(['error' => 'El archivo no existe o no es compatible.']);
         }
 
-        if (!runNativePlayerPowerShell($sid, $filePath, $type, $left, $top, $width, $height, $playerJobsPath)) {
+        // muted=1: host esclavo de multi-pantalla (video sin audio; el audio
+        // sale solo del host maestro).
+        $mutedHost = !empty($_GET['muted']);
+
+        if (!runNativePlayerPowerShell($sid, $filePath, $type, $left, $top, $width, $height, $playerJobsPath, $mutedHost)) {
             sendJson(['error' => 'No se pudo abrir el reproductor de Windows.']);
         }
 
