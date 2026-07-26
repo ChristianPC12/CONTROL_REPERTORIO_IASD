@@ -310,6 +310,114 @@ body {
   padding: 1.75rem;
 }
 
+/* ─── Modo APILADO (pantalla dividida) ─────────────────────────
+   app.js pone body.layout-stacked cuando la ventana real es angosta.
+   Los tres paneles se apilan: controles arriba, repertorio al centro
+   (flexible, con su scroll interno) y búsqueda/descarga abajo.
+   Se ocultan los elementos decorativos para aprovechar el alto. */
+body.layout-stacked .shell {
+  padding: 0.8rem 0 0.9rem;
+}
+
+body.layout-stacked .hero-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+body.layout-stacked .hero {
+  flex: 0 0 auto;
+  padding: 1.05rem 1.4rem 1.15rem;
+}
+
+body.layout-stacked .grid-wrap {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: auto;
+}
+
+body.layout-stacked .hero-aside {
+  flex: 0 0 auto;
+}
+
+/* Panel superior compacto: título + selects en fila + botones. */
+body.layout-stacked .eyebrow,
+body.layout-stacked .lead {
+  display: none;
+}
+
+body.layout-stacked .hero-copy {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px 14px;
+  align-items: start;
+  height: auto;
+}
+
+body.layout-stacked .hero-copy h1 {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: 1.55rem;
+}
+
+body.layout-stacked .actions {
+  grid-column: 1;
+  margin: 0;
+}
+
+body.layout-stacked .actions .folder-select {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+body.layout-stacked .playback-options {
+  grid-column: 2 / 4;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin: 0;
+}
+
+body.layout-stacked .folder-action-row {
+  grid-column: 1 / -1;
+}
+
+body.layout-stacked .status-line {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+/* Panel inferior en una sola fila: buscar + contador + descargar. */
+body.layout-stacked .hero-aside.right-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) auto minmax(0, 1fr);
+  gap: 14px;
+  align-items: end;
+  padding: 0.95rem 1.4rem 1.15rem;
+}
+
+body.layout-stacked .compact-hint,
+body.layout-stacked .brand-logo {
+  display: none;
+}
+
+body.layout-stacked .stat {
+  min-height: 0;
+  padding: 0.62rem 1.1rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+
+body.layout-stacked .stat span {
+  font-size: 1.5rem;
+}
+
+body.layout-stacked .stat label {
+  margin-top: 0;
+  font-size: 0.72rem;
+}
+
 .eyebrow {
   margin: 0 0 8px;
   color: var(--gold-2);

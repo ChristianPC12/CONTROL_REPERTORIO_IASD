@@ -3,21 +3,37 @@
 // tamaño real de la ventana. Resultado: se ve EXACTAMENTE igual con cualquier
 // zoom del navegador o dimensión de ventana.
 const APP_DESIGN_WIDTH = 1389;
-// Altura máxima del lienzo de diseño. En pantalla completa de PC la altura
-// natural ronda 780-870px; sin este tope, una ventana angosta (pantalla
-// dividida) disparaba la altura del lienzo y todo se veía estirado. Con el
-// tope, la app solo se ESCALA (más pequeña) pero mantiene sus proporciones.
+// Altura máxima del lienzo de diseño (modo 3 columnas). En pantalla completa
+// la altura natural ronda 780-870px; sin tope, una ventana angosta disparaba
+// la altura y todo se veía estirado.
 const APP_DESIGN_MAX_HEIGHT = 900;
+// Modo APILADO (pantalla dividida): por debajo de este ancho REAL de ventana,
+// los tres paneles se apilan (izquierdo arriba, repertorio al centro con su
+// scroll interno, derecho abajo) y llenan toda la ventana sin scroll de página.
+const APP_STACKED_MAX_WIDTH = 1100;
+// Ancho de diseño del modo apilado: cercano al ancho real de media pantalla,
+// para que el texto se vea a tamaño natural (escala ~1).
+const APP_DESIGN_WIDTH_STACKED = 920;
 
 function fitAppToViewport() {
-  const scale = window.innerWidth / APP_DESIGN_WIDTH;
+  const stacked = window.innerWidth < APP_STACKED_MAX_WIDTH;
+  const designWidth = stacked ? APP_DESIGN_WIDTH_STACKED : APP_DESIGN_WIDTH;
+  const scale = window.innerWidth / designWidth;
   if (!scale || !isFinite(scale)) return;
 
   const body = document.body;
-  body.style.width = APP_DESIGN_WIDTH + 'px';
-  body.style.height = Math.min(window.innerHeight / scale, APP_DESIGN_MAX_HEIGHT) + 'px';
+  body.classList.toggle('layout-stacked', stacked);
+  body.style.width = designWidth + 'px';
+  // Apilado: llena la ventana (los paneles se reparten el alto).
+  // 3 columnas: tope de altura para no estirar los paneles.
+  body.style.height = (stacked
+    ? (window.innerHeight / scale)
+    : Math.min(window.innerHeight / scale, APP_DESIGN_MAX_HEIGHT)) + 'px';
   body.style.transformOrigin = '0 0';
   body.style.transform = 'scale(' + scale + ')';
+  // Escala real aplicada: la usan los módulos que convierten px de pantalla
+  // a px del lienzo (p. ej. el dropdown propio de los selects).
+  window.cmAppScale = scale;
 }
 
 fitAppToViewport();
@@ -5531,7 +5547,8 @@ if (themeApplyBtn) {
   panel.setAttribute('role', 'listbox');
 
   function scale() {
-    var s = window.innerWidth / (typeof APP_DESIGN_WIDTH === 'number' ? APP_DESIGN_WIDTH : 1389);
+    // Escala real aplicada por fitAppToViewport (cambia en modo apilado).
+    var s = window.cmAppScale || (window.innerWidth / (typeof APP_DESIGN_WIDTH === 'number' ? APP_DESIGN_WIDTH : 1389));
     return (s && isFinite(s)) ? s : 1;
   }
 
