@@ -372,9 +372,17 @@ body.layout-stacked .actions .folder-select {
 
 body.layout-stacked .playback-options {
   grid-column: 2 / 4;
-  grid-template-columns: 1fr 1fr;
+  /* minmax(0,...): permite encoger las celdas aunque el texto del selector
+     de pantalla sea largo (sin esto, el botón se comía el gap y "chocaba"
+     con el select de tipo). Pantalla recibe más ancho que Video/Imagen. */
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 0.65fr);
   gap: 14px;
   margin: 0;
+}
+
+body.layout-stacked .option-select,
+body.layout-stacked .monitor-multi-btn {
+  min-width: 0;
 }
 
 body.layout-stacked .folder-action-row {
