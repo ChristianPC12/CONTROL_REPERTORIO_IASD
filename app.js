@@ -3,6 +3,11 @@
 // tamaño real de la ventana. Resultado: se ve EXACTAMENTE igual con cualquier
 // zoom del navegador o dimensión de ventana.
 const APP_DESIGN_WIDTH = 1389;
+// Altura máxima del lienzo de diseño. En pantalla completa de PC la altura
+// natural ronda 780-870px; sin este tope, una ventana angosta (pantalla
+// dividida) disparaba la altura del lienzo y todo se veía estirado. Con el
+// tope, la app solo se ESCALA (más pequeña) pero mantiene sus proporciones.
+const APP_DESIGN_MAX_HEIGHT = 900;
 
 function fitAppToViewport() {
   const scale = window.innerWidth / APP_DESIGN_WIDTH;
@@ -10,7 +15,7 @@ function fitAppToViewport() {
 
   const body = document.body;
   body.style.width = APP_DESIGN_WIDTH + 'px';
-  body.style.height = (window.innerHeight / scale) + 'px';
+  body.style.height = Math.min(window.innerHeight / scale, APP_DESIGN_MAX_HEIGHT) + 'px';
   body.style.transformOrigin = '0 0';
   body.style.transform = 'scale(' + scale + ')';
 }
@@ -5338,8 +5343,8 @@ const APP_THEMES = [
   {
     id: 'clasico',
     name: 'Clásico',
-    desc: 'Blanco limpio con grafito y azul marino.',
-    swatches: ['#f5f6f8', '#ffffff', '#2c4a7c', '#7c8494', '#1d232e'],
+    desc: 'Blanco y negro puro, sobrio.',
+    swatches: ['#f5f5f5', '#ffffff', '#1f1f1f', '#3d3d3d', '#141414'],
   },
   {
     id: 'cielo',
